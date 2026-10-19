@@ -118,6 +118,8 @@ static void test_match(void)
 		"/data/media/0/Android/data/com.example.hidden/files",
 		"/storage/emulated/0/Android/data/com.example.hidden",
 		"/sdcard/Android/data/com.example.hidden",
+		"/data/system/packages.list",
+		"/data/system/packages.xml",
 	};
 	static const char *const no[] = {
 		"/data/app/~~aB12==/com.example.hidden2-Xy/base.apk",
@@ -129,6 +131,7 @@ static void test_match(void)
 		"/data/media/0/Android/data/com.example.hidden2",
 		"/storage/emulated/0/Android/data/com.example.hidden2",
 		"/system/app/com.example.hidden/base.apk",
+		"/data/system/packages.list.bak",
 		"/proc/1234",
 		"",
 	};
@@ -260,6 +263,28 @@ static void test_request_rename(void)
 	CHECK(contains(buf, len, "android.content.pm.IPackageManager", 34));
 }
 
+/* Process names ("pkg:remote") and flattened component names ("pkg/.Main")
+ * must be renamed on the package part only. */
+static void test_component_rename(void)
+{
+	unsigned char buf[512];
+	unsigned int len = 0, mode = 0, new_len;
+
+	len = put_str16(buf, len, "com.example.hidden:remote");
+	len = put_str16(buf, len, "com.example.hidden/.MainActivity");
+	len = put_str16(buf, len, "com.example.hidde2:remote");
+	len = put_str16(buf, len, "com.example.hidden");
+
+	new_len = xe_parcel_filter(buf, len, k_names, 1, &mode);
+	CHECK(mode == XE_PARCEL_REWRITTEN);
+	CHECK(new_len == len);
+	CHECK(contains(buf, len, "com.example.hidden", 18) == 0);
+	CHECK(contains(buf, len, "com.example.hidde2:remote", 25) == 1);
+	CHECK(contains(buf, len, ":remote", 7) == 1);
+	CHECK(contains(buf, len, "/.MainActivity", 14) == 1);
+	CHECK(contains(buf, len, "qqq.qqqqqqq.qqqqqq", 18) == 1);
+}
+
 static void test_negative(void)
 {
 	unsigned char buf[256];
@@ -297,6 +322,7 @@ int main(void)
 	test_string_array();
 	test_substitution_fallback();
 	test_request_rename();
+	test_component_rename();
 	test_negative();
 	printf("%d checks, %d failure(s)\n", checks, failures);
 	return failures ? 1 : 0;
