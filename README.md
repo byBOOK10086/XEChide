@@ -1,5 +1,7 @@
 # XEChide
 
+[![ci](https://github.com/byBOOK10086/XEChide/actions/workflows/ci.yml/badge.svg)](https://github.com/byBOOK10086/XEChide/actions/workflows/ci.yml)
+
 **Kernel-level app & path hiding for KernelSU.** Nothing is injected into the
 target process, and `PackageManager` replies are filtered **inside the kernel**
 before a detector ever sees them. Lower level than HMA-oss.
