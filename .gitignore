@@ -1,0 +1,26 @@
+# build artefacts
+*.o
+*.obj
+*.exe
+*.pdb
+*.a
+*.so
+*.dylib
+tests/host/xechide-host-tests*
+
+# android
+manager/.gradle/
+manager/build/
+manager/app/build/
+manager/local.properties
+manager/.idea/
+manager/captures/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# editors
+.vscode/
+.DS_Store
+Thumbs.db
