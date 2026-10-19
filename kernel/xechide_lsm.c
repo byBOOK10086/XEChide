@@ -143,7 +143,8 @@ static struct ksu_lsm_hook xe_inode_permission_hook, xe_inode_getattr_hook, xe_f
 typedef int (*inode_permission_fn)(struct inode *inode, int mask);
 
 static int xe_inode_permission(struct inode *inode, int mask)
-{	u32 uid = current_uid().val;
+{
+	u32 uid = current_uid().val;
 	char buf[XE_PATH_MAX];
 	struct dentry *d;
 	int ret;
