@@ -36,6 +36,12 @@ static DEFINE_SPINLOCK(xechide_cfg_lock);
 
 static atomic_t xechide_stats[XE_STAT_MAX];
 
+/* Hot-path copies of two config facts, refreshed after every successful SET.
+ * READ_ONCE is enough: a stale value only costs one extra (or one missed)
+ * hook call until the next configuration update. */
+static unsigned int xe_n_rules;
+static bool xe_self_hide;
+
 /*
  * L0 self-hiding is cheap: instead of resolving a path for every file
  * operation of every uid, the superblock of /data/adb is cached once and the
@@ -62,16 +68,7 @@ bool xechide_on_adb_sb(const void *sb)
 
 bool xechide_self_hide_enabled(void)
 {
-	const struct xechide_config *cfg;
-	bool on = false;
-
-	if (!xechide_enabled)
-		return false;
-	rcu_read_lock();
-	cfg = rcu_dereference(xechide_cfg);
-	on = cfg && (cfg->flags & XECHIDE_CF_HIDE_SELF);
-	rcu_read_unlock();
-	return on;
+	return READ_ONCE(xe_self_hide);
 }
 
 void xechide_stat_inc(int which)
@@ -105,7 +102,7 @@ bool xechide_uid_has_rules(u32 uid, u32 what)
 	bool hit = false;
 	u32 i;
 
-	if (!xechide_enabled || uid_protected(uid))
+	if (!xechide_enabled || uid_protected(uid) || !READ_ONCE(xe_n_rules))
 		return false;
 
 	rcu_read_lock();
@@ -188,7 +185,7 @@ static u32 pid_uid(u32 nr)
 bool xechide_hide_path(u32 uid, const char *path)
 {
 	const struct xechide_config *cfg;
-	bool hidden = false;
+	bool hidden = false, is_proc = false;
 	u32 i;
 
 	if (!xechide_enabled || uid_protected(uid) || !path || path[0] != '/')
@@ -218,7 +215,7 @@ bool xechide_hide_path(u32 uid, const char *path)
 			u32 owner = pid_uid(pid);
 
 			if (rule->hidden_uid && owner == rule->hidden_uid) {
-				xechide_stat_inc(XE_STAT_PROC);
+				is_proc = true;
 				hidden = true;
 				break;
 			}
@@ -227,7 +224,7 @@ bool xechide_hide_path(u32 uid, const char *path)
 out:
 	rcu_read_unlock();
 	if (hidden)
-		xechide_stat_inc(XE_STAT_PATH);
+		xechide_stat_inc(is_proc ? XE_STAT_PROC : XE_STAT_PATH);
 	return hidden;
 }
 
@@ -332,8 +329,6 @@ static bool pkg_valid(const unsigned char *pkg)
 {
 	u32 i;
 
-	if (!pkg[0])
-		return false;
 	for (i = 0; i < XECHIDE_PKG_LEN; i++) {
 		unsigned char c = pkg[i];
 
@@ -359,7 +354,6 @@ static int cfg_validate(struct xechide_config *cfg)
 	for (i = 0; i < cfg->n_rules; i++) {
 		struct xechide_rule *rule = &cfg->rules[i];
 
-		rule->pkg[XECHIDE_PKG_LEN - 1] = 0;
 		if (!pkg_valid(rule->pkg))
 			return -EINVAL;
 		if (rule->target_uid == 0 || rule->target_uid == 1000)
@@ -394,6 +388,8 @@ int xechide_ioctl_set(void __user *arg)
 	spin_lock(&xechide_cfg_lock);
 	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
 	rcu_assign_pointer(xechide_cfg, cfg);
+	WRITE_ONCE(xe_n_rules, cfg->n_rules);
+	WRITE_ONCE(xe_self_hide, (cfg->flags & XECHIDE_CF_HIDE_SELF) != 0);
 	spin_unlock(&xechide_cfg_lock);
 
 	if (old) {
@@ -462,6 +458,8 @@ void __exit xechide_remove(void)
 	struct xechide_config *old;
 
 	xechide_enabled = false;
+	WRITE_ONCE(xe_n_rules, 0);
+	WRITE_ONCE(xe_self_hide, false);
 	spin_lock(&xechide_cfg_lock);
 	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
 	rcu_assign_pointer(xechide_cfg, NULL);
