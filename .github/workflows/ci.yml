@@ -9,6 +9,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  abi-cross-check:
+    name: ABI cross-check (kernel / app / helper / patch)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/abi_check.py
+
   host-tests:
     name: host tests (matching + parcel)
     runs-on: ubuntu-latest
