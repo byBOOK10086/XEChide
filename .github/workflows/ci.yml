@@ -1,0 +1,35 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: host tests (matching + parcel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run
+        run: make -C tests/host
+
+  patch-apply:
+    name: patch applies to stock KernelSU
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the pinned KernelSU tree
+        run: |
+          git init --quiet "$RUNNER_TEMP/ksu"
+          cd "$RUNNER_TEMP/ksu"
+          git remote add origin https://github.com/tiann/KernelSU.git
+          git fetch --quiet --depth 1 origin 0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2
+          git checkout --quiet FETCH_HEAD
+          echo "base: $(git rev-parse HEAD)"
+
+      - name: Check the patch
+        run: |
+          cd "$RUNNER_TEMP/ksu"
+          git apply --check -v "$GITHUB_WORKSPACE/patches/xechide-core.patch"
