@@ -136,6 +136,16 @@ int xe_match_path(const struct xechide_rule *rule, const char *path)
 	if (!(rule->flags & XECHIDE_RF_PATHS))
 		return false;
 
+	/*
+	 * The package database itself. Denying the whole file is the only
+	 * scalable option, and only target uids ever reach this function; the
+	 * entry is here so a detector that can read packages.list (shell) cannot
+	 * bypass the binder filter by parsing the file.
+	 */
+	if (!strcmp(path, "/data/system/packages.list") ||
+	    !strcmp(path, "/data/system/packages.xml"))
+		return true;
+
 	if (match_apk_dir(path, pkg))
 		return true;
 	if (component_prefix(path, "/data/data/", pkg))
