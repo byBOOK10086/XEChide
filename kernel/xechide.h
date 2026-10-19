@@ -102,6 +102,8 @@ enum xechide_stat {
 
 /* xechide_core.c */
 bool xechide_uid_has_rules(u32 uid, u32 what);
+bool xechide_self_hide_enabled(void);
+bool xechide_on_adb_sb(const void *sb);
 bool xechide_hide_path(u32 uid, const char *path);
 bool xechide_hide_dirent(u32 uid, u32 dir, const char *name, int namelen);
 unsigned int xechide_filter_parcel(u32 uid, unsigned char *buf, unsigned int len, unsigned int *mode);
