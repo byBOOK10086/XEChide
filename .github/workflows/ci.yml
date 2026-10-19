@@ -17,12 +17,12 @@ jobs:
       - run: python3 tools/abi_check.py
 
   host-tests:
-    name: host tests (matching + parcel)
+    name: host tests (matching + parcel + ASan fuzz)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build and run
+      - name: Build, run and fuzz
         run: make -C tests/host
 
   ctl-build:
