@@ -3,7 +3,6 @@ package dev.xechide.manager.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.xechide.manager.R
@@ -206,7 +207,7 @@ fun AppPickerScreen(
                                 app = app,
                                 checked = checked,
                                 onToggle = {
-                                    selected = if (checked) {
+                                    selected = if (app.packageName in selected) {
                                         selected - app.packageName
                                     } else {
                                         selected + app.packageName
@@ -230,7 +231,11 @@ private fun AppPickerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .toggleable(
+                value = checked,
+                role = Role.Checkbox,
+                onValueChange = { _ -> onToggle() },
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -286,7 +291,7 @@ private fun AppPickerRow(
         Spacer(Modifier.width(8.dp))
         Checkbox(
             checked = checked,
-            onCheckedChange = { _ -> onToggle() },
+            onCheckedChange = null,
         )
     }
 }
