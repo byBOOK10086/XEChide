@@ -70,7 +70,7 @@ docs/        design, threat model, config protocol
    and build the image as usual (`patches/README.md` has the exact base commit).
 2. **Manager**: install `manager/` (package `dev.xechide.manager`), pick hidden
    packages and the apps that must not see them, apply.
-3. **Verify**: `tools/probe/` reproduces what a detector sees on your device.
+3. **Verify**: `tools/probe.sh` reproduces what a detector sees on your device.
 
 The kernel part is verified by CI in two ways: the pure matching/parcel code is
 compiled and executed on the host, and the patch is checked against the pinned
