@@ -6,6 +6,10 @@ table, the second table is a checklist for a human with a phone.
 
 ## 1. Automatic (CI, every push)
 
+All five jobs are green on `main` (2026-10-20): ABI cross-check, host tests +
+ASan fuzz, root helper host build, stock-KernelSU patch apply, and the
+aarch64-linux-musl helper build.
+
 | Check | Command | Proves |
 |---|---|---|
 | pure logic | `make -C tests/host` | path/dirent matching and parcel rewriting behave as specified on real parcel layouts |
