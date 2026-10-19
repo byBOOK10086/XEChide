@@ -29,7 +29,7 @@ XEChide moves the hiding out of the process:
 | Layer | Lives in | Stops |
 |---|---|---|
 | **L0 · LSM file layer** | kernel (`inode_permission`, `inode_getattr`, `filldir`) | direct reads of `/data/app/<pkg>*`, `/data/data/<pkg>`, `/data/media/*/Android/data/<pkg>`, `/proc/<hidden pid>` |
-| **L1 · binder reply filter** | kernel (`binder_transaction`) | `IPackageManager.getInstalledPackages`, `getPackagesForUid`, `queryIntent*`, `getApplicationInfo` replies |
+| **L1 · binder parcel filter** | kernel (`binder_transaction`, `binder_thread_read`) | `IPackageManager`, `IActivityManager`, `IActivityTaskManager`, `IUsageStatsManager`, `IAppOpsService` - replies are filtered, requests are rewritten |
 | **L2 · self-hiding** | kernel (same LSM layer, fixed deny-list) | XEChide's own config/log dir from every non-root uid |
 | **L3 · shell tightening** | kernel (per-uid rules) | `adb shell pm list packages`, `ls /data/app` — uid 2000 is just another target |
 
