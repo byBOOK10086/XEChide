@@ -12,9 +12,11 @@ fork.
 > with an explicit message instead of a mysterious `127` from the shell. A
 > release build must bundle the helper.
 
-The app has not been run on a physical device in this repository. The kernel
-side is host-tested; the manager and root helper are still unverified end to
-end. Do not treat any screen as proof that the kernel patch is active.
+The app **compiles**: a debug APK was built on 2026-10-20 with JDK 17,
+Gradle 8.9, AGP 8.7.3 and compileSdk 35, with the helper bundled. It has not
+been run on a physical device, the helper has not been executed, and the kernel
+patch has not been compiled. Do not treat any screen as proof that the kernel
+patch is active.
 
 ## What it does
 
