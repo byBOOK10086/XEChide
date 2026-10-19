@@ -47,7 +47,6 @@
     <string name="error_no_targets">Choose at least one target app, or enable all non-root apps.</string>
     <string name="error_no_rules">The current selection produces no rules. Choose apps again.</string>
     <string name="error_too_many_rules">The current selection needs %1$d rules, over the limit of %2$d. Reduce hidden apps or target apps.</string>
-    <string name="error_invalid_config">Could not build the configuration: %1$s</string>
     <string name="error_operation">Operation failed: %1$s</string>
     <string name="snack_apply_success">Configuration applied: %1$d rules.</string>
     <string name="snack_apply_failed">Apply failed (exit code %1$d). See the status card for details.</string>
