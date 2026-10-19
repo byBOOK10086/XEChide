@@ -13,6 +13,7 @@
  *   xechide-ctl version
  */
 #include <errno.h>
+#include <stdbool.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -173,9 +174,9 @@ static int cmd_stats(int fd)
 	return 0;
 }
 
-static void usage(const char *argv0)
+static void usage(FILE *out, const char *argv0)
 {
-	fprintf(stderr,
+	fprintf(out,
 		"usage: %s <command>\n"
 		"  set     read one struct xechide_config (%zu bytes) from stdin and apply it\n"
 		"  get     write the live configuration to stdout\n"
@@ -187,16 +188,31 @@ static void usage(const char *argv0)
 
 int main(int argc, char **argv)
 {
+	bool want_help, known;
 	int fd, ret;
 
 	if (argc != 2) {
-		usage(argv[0]);
+		usage(stderr, argv[0]);
 		return 2;
+	}
+
+	want_help = !strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help");
+	if (want_help) {
+		usage(stdout, argv[0]);
+		return 0;
 	}
 	if (!strcmp(argv[1], "version")) {
 		printf("xechide-ctl abi %u, config %zu bytes, max %u rules\n", XECHIDE_ABI_VERSION,
 		       sizeof(struct xechide_config), XECHIDE_MAX_RULES);
 		return 0;
+	}
+
+	/* Validate the command before touching the kernel: a typo must not probe
+	 * for a driver descriptor. */
+	known = !strcmp(argv[1], "set") || !strcmp(argv[1], "get") || !strcmp(argv[1], "stats");
+	if (!known) {
+		usage(stderr, argv[0]);
+		return 2;
 	}
 
 	fd = install_driver_fd();
@@ -207,12 +223,8 @@ int main(int argc, char **argv)
 		ret = cmd_set(fd);
 	else if (!strcmp(argv[1], "get"))
 		ret = cmd_get(fd);
-	else if (!strcmp(argv[1], "stats"))
+	else
 		ret = cmd_stats(fd);
-	else {
-		usage(argv[0]);
-		ret = 2;
-	}
 	close(fd);
 	return ret;
 }
