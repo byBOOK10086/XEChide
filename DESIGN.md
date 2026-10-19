@@ -8,137 +8,152 @@ implemented in `kernel/` or explicitly listed as *not* provided.
 - **hidden package** — the app that must become invisible.
 - **target** — the app that must not see the hidden package (the detector, the
   game, a specific banking app, `adb shell`).
-- **rule** — `(target_uid, hidden_pkg)`; rules are the only thing that changes
-  behaviour.
+- **rule** — `(target_uid, hidden_uid, hidden_pkg)`; rules are the only thing
+  that changes behaviour.
 - Everything runs in the KernelSU kernel module. No userspace process is
   involved in enforcement, so killing the manager changes nothing.
 
-## 1. L0 — LSM file layer
+## 1. L0 — file layer
 
 Goal: the target cannot read the hidden app's files, and cannot learn that they
 exist.
 
-Hooks (all inside `kernel/xechide.c`, registered from `kernel/core/init.c`):
+| Hook | Mechanism | Covers |
+|---|---|---|
+| `inode_permission` | `ksu_lsm_hook()` slot replacement | open/exec/access decisions |
+| `inode_getattr` | same | `stat`/`lstat` of the path itself |
+| `file_permission` | same | read/write on an already open descriptor |
+| `file_open` | same | `open`, `openat`, `execve` |
+| `dir_context.actor` | `iterate_dir` kretprobe + actor swap | `getdents`/`getdents64` listings |
 
-```c
-security_inode_permission(inode, mask)   /* read/exec/open */
-security_inode_getattr(path)             /* stat of the path itself */
-security_file_permission(file, mask)     /* already-open files */
-dir_context.actor (`filldir`)            /* readdir must not list them */
-```
+The replacement runs before the original SELinux handler and calls it for
+everything it does not deny, so SELinux enforcement is never weakened.
+`inode_permission` carries no path, so one is resolved with `d_find_alias()` +
+`dentry_path_raw()` — only for uids that actually have rules, and only for
+read/exec/access masks.
 
-Matching is done on the **inode's path** (`d_path` into a small buffer, cached
-per target uid, invalidated on rename) against per-rule prefixes:
+Matching covers the layouts Android really uses:
 
-| Hidden path class | Example |
+| Class | Example |
 |---|---|
-| APK root | `/data/app/~~a1b2/<pkg>-aBcD==/` |
-| data | `/data/data/<pkg>/`, `/data/user/<n>/<pkg>/` |
-| obb/media | `/data/media/<n>/Android/data/<pkg>/` |
-| proc | `/proc/<pid>/` for every pid whose uid owns a hidden package |
-| package.xml views | `/data/system/packages.list` (target-only deny, never for system_server) |
+| APK | `/data/app/~~a1b2/<pkg>-aBcD==/`, `/data/app/<pkg>-aBcD==/` |
+| data | `/data/data/<pkg>/`, `/data/user/<n>/<pkg>/`, `/data/user_de/<n>/<pkg>/` |
+| obb/media | `/data/media/<n>/Android/data/<pkg>/`, `/storage/emulated/<n>/...`, `/sdcard/Android/data/<pkg>` |
+| proc | `/proc/<pid>/` where `<pid>`'s uid equals the rule's `hidden_uid` |
 
 Hard rules:
 
-- **Never** match `system_server` (uid 1000) or `init` — denying PMS its own
-  files bricks the boot.
-- **Never** deny writes; only read/exec/getattr.
-- `filldir` filtering is per-directory: a single check on the opened directory
-  inode (cached) plus a prefix compare on each returned name.
-- If the path cannot be resolved (too long / no dentry), the call is **allowed**
-  (fail-open). A missed hide is a bug report; a wrong deny is a bricked device.
+- **Never** match uid 0 or 1000; denying system_server its own files bricks the
+  boot.
+- **Never** deny writes; only read/exec/getattr/readdir.
+- Deny with `-ENOENT`, never `-EACCES`: the latter tells the detector
+  "something exists here but you may not look".
+- A path that cannot be resolved is **allowed** (fail-open).
 
-## 2. L1 — binder reply filter
+## 2. L1 — binder
 
-This is what makes XEChide lower than every userspace hider: the *data* is
-removed from the binder transaction, so the target's `PackageManager` calls
-return a shorter list, not a hooked one.
+This is what makes XEChide lower than every userspace hider: there is no hook
+inside the detector's process, and the data is edited in the kernel.
 
-Hook point: `binder_transaction` (or the reply path in `binder_thread_read`) —
-we need the transaction whose **destination is the package service** and whose
-**sender is a target uid**. The reply parcel is a `Parcel` with
-`int32 len` + body; the body for `getInstalledPackages` is
-`List<PackageInfo>`: `int32 N`, then N `PackageInfo` parcels, each prefixed by
-its length.
+Two probes, neither of which reads a binder-internal structure:
 
-Filter algorithm (strict):
+1. **`binder_transaction` (request side).** Runs in the caller's context, so
+   `current_uid()` is the target uid. When the parcel carries the
+   `android.content.pm.IPackageManager` interface token, the thread is marked
+   and package names in the request are renamed in place, same length. A
+   `getPackageInfo("hidden")` therefore reaches PMS as a request for a package
+   that does not exist, and PMS itself produces a genuine
+   `NameNotFoundException`.
+2. **`binder_thread_read` (reply side).** Also runs in the caller's context. If
+   the thread is marked and the read buffer contains `BR_REPLY`, the reply
+   parcel is rewritten on a private copy before the process ever parses it.
 
-1. Read `len`, `N`, and the offset of every `PackageInfo` block; walk them once
-   to build a **plan** (`keep[i]` flags). Any structural mismatch → abort.
-2. If nothing is dropped, do nothing.
-3. Otherwise write a new parcel: new `N`, then the kept blocks, with lengths
-   unchanged (each block is self-contained). Update the outer `len` and the
-   binder reply's byte count.
-4. **Abort (pass through unchanged)** on: unknown service, unknown transaction
-   code, non-list payload, target uid not in rules, any bounds error.
+Reply rewriting has two strategies, in order:
 
-Which transaction codes: `GET_INSTALLED_PACKAGES`, `GET_PACKAGES_FOR_UID`,
-`QUERY_INTENT_ACTIVITIES`/`SERVICES`/`RECEIVERS`, `GET_APPLICATION_INFO`,
-`GET_PACKAGE_INFO`, `RESOLVE_INTENT`, `GET_INSTALLED_APPLICATIONS`,
-`GET_APP_INFO` (legacy AIDL codes live in `IPackageManager`; they are looked up
-by name at load time from `/system/framework/framework.jar`? no — they are
-stable AIDL transaction numbers; see `kernel/binder_codes.h`).
+1. **Structural removal.** If the parcel is a `List<PackageInfo>` or a
+   `String[]`, every element boundary is derived from the parcel itself. For a
+   package list the element start is recognisable (presence `int32 1` followed
+   by the package-name string, in either String16 or String8 encoding), the
+   element count must match the container header exactly, and only then is the
+   element removed and the count fixed.
+2. **Length-preserving rename.** Anything else — a `List<ResolveInfo>`, a
+   request parcel, a list whose shape did not validate — gets the hidden name
+   replaced by a same-length name (`com.example.app` → `qqq.qqqqq.qqq`). The
+   parcel layout does not change at all, so this cannot desynchronise the
+   receiver.
 
-Because the transaction numbers must track Android releases, the filter is
-**opt-in per code** and the kernel logs an audit line (`dmesg -s`) whenever a
-code is unknown, so mismatches are visible without breaking anything.
+`offsets_size != 0` (the parcel carries binder objects or file descriptors) is
+always passed through untouched.
+
+Which calls are covered: every `IPackageManager` transaction, both directions.
+That is intentionally *not* a table of AIDL transaction codes, which change per
+Android release; the interface token and the structure of the parcel are the
+selector instead.
 
 ## 3. L2 — self-hiding
 
-The kernel hides its own artefacts with the same L0 code, with a fixed
-default deny-list for every non-root uid:
+The same L0 code hides the project's own artefacts, for every uid except 0 and
+1000:
 
 ```
-/data/adb/xechide/            (encrypted config, logs)
+/data/adb/xechide/            encrypted config, helper binary, logs
 ```
 
-Plus: XEChide does not create a process, a socket, or a `/proc` entry. The
-manager app talks to the kernel over the KernelSU supercall (`/proc` fd already
-hidden by KernelSU itself).
+The kernel creates no process, no socket and no `/proc` entry. The manager
+talks to the kernel through a root helper that installs a KernelSU driver
+descriptor and issues three ioctls (see `docs/config-protocol.md`).
 
 ## 4. Config protocol
 
-- RAM: `struct xechide_config { u32 magic; u32 version; u32 n_rules;
-  struct xechide_rule rules[MAX]; }` — MAX = 128 rules, each
-  `{ u32 target_uid; u8 pkg[128]; u8 flags; }`.
-- Transport: two new KernelSU supercalls (`KSU_IOCTL_XECHIDE_GET`,
-  `KSU_IOCTL_XECHIDE_SET`), `perm = only_manager`. The manager app is the only
-  caller allowed; `ksud` gets a CLI for scripting.
-- Persistence: `/data/adb/xechide/cfg.bin` — AES-256-GCM, key derived from a
-  random 32-byte secret written **once** at install into the KernelSU manager's
-  private dir; file mode 0600, owner root. The kernel never writes it; `ksud`
-  reads it at boot and pushes it through the supercall. If the file is missing
-  or fails to decrypt, XEChide runs with **zero rules** (nothing hidden).
-- The list is *never* in plaintext on disk and *never* exposed to a non-root
-  uid (L0 hides both the dir and the file).
+A fixed packed struct (`kernel/xechide.h`), validated and published with one
+RCU swap. The wire format, the ioctl numbers and the validation order are in
+[`docs/config-protocol.md`](docs/config-protocol.md).
+
+Summary: `SET` replaces everything, `GET` reads it back, `STATS` returns the
+counters; all three are root-only. Invalid input leaves the previous rules in
+force. An empty configuration hides nothing.
 
 ## 5. What XEChide does not do
 
 - It does not modify `system_server`, PMS, or any framework jar.
 - It cannot hide a package from an app that **has root** — root reads kernel
-  memory.
-- It cannot hide the `install`/`uninstall` broadcast for a package that is
-  installed *after* the rule is applied (rules key off the package name; the
-  broadcast already carries it). Workaround: apply rules before installing.
-- It does not hide a package's **notifications**, which are posted by
-  system_server as the hidden app (out of scope; document it).
+  memory. Out of scope by definition.
+- It cannot hide the `install`/`uninstall` broadcast for a package installed
+  *after* the rule is applied.
+- It does not hide a package's **notifications**, which system_server posts as
+  the hidden app.
 - It does not hide the package from `dumpsys package` run as root.
 - It does not fake `Play Integrity`.
+- When reply rewriting falls back to a rename, a detector that cross-checks
+  every listed package with `getPackageInfo()` will see one name that does not
+  resolve. Structural removal (the preferred path) does not have this problem;
+  the fallback exists because a corrupted parcel is far worse than a suspicious
+  one.
 
 ## 6. Performance
 
-- L0: one hash lookup per path operation on a hot cache (`d_path` cached by
-  inode, LRU 512). Measured target: < 2 % on `app_launch` benchmarks.
-- L1: binder transactions to PMS are rare (a few per app start); the walk is
-  O(entries) over a 1–3 KB parcel. Zero cost when a uid has no rules (single
-  bitmap test at the top of the hook).
+- L0: one rule-bitmap test per hook; path resolution only for uids that have
+  rules. Readdir: one kretprobe entry per `getdents`, one hash probe per entry.
+- L1: binder probes see every transaction, but the request path is a single
+  `xechide_uid_has_rules()` test for non-target uids. Parcel work happens only
+  for target uids, on a preallocated buffer, protected by `spin_trylock` — if
+  another filter is in flight the parcel is passed through untouched.
+- A target uid with no rules configured costs one RCU dereference.
 
 ## 7. Failure policy
 
 | Failure | Behaviour |
 |---|---|
-| Unknown binder code / malformed parcel | pass through, audit once per uid |
+| `selinux_*` symbol missing | that hook is skipped; the rest install |
+| `iterate_dir` / binder probes fail | that layer is off, the other still works |
 | `d_path` failure | allow |
-| Config decrypt failure | zero rules |
-| Kernel panic risk (bounds) | all reads through `copy_from_user`-style checked helpers; no writes to userspace buffers except the reply rebuild, which is bounds-checked |
-| Uninstall | rules vanish on reboot (kernel memory only); nothing to clean |
+| Parcel does not validate | send it unchanged |
+| Config invalid / decrypt failure | zero rules, previous config kept |
+| Bounds | every read goes through a checked helper; nothing is written to userspace except the reply that was just validated |
+
+## 8. Security posture
+
+Deny decisions are only ever *added* for the hidden paths of a configured
+target uid. Nothing in the design shortens SELinux checks, and no code path
+returns success where the kernel would have returned an error: the hooks can
+only turn an allowed operation into `-ENOENT`, never the other way around.
