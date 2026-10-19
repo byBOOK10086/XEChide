@@ -23,7 +23,22 @@ String8 encodings, `String[]` arrays, request parcels) and asserts that
   `/data/user/<n>`, `/data/media/<n>/Android/data`, `/sdcard/Android/data`)
   and rejects look-alike names.
 
-## 2. Patch check
+Then `make -C tests/host fuzz` builds the same parser with
+`-fsanitize=address,undefined` and feeds it 200k deterministic random parcels
+(plus every boundary shape). `make -C tests/host` runs both.
+
+## 2. ABI cross-check
+
+```
+python3 tools/abi_check.py
+```
+
+37 assertions over the places the packed ABI is encoded: header defines, packed
+sizes (140/8976), Kotlin constants and codec stride, helper ioctl numbers, the
+patch's ioctl additions, the protocol doc, and the package-name charset shared
+by kernel and manager.
+
+## 3. Patch check
 
 `patches/xechide-core.patch` applies cleanly to stock KernelSU
 `0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2`:
