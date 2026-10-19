@@ -15,7 +15,11 @@
 1. Packages installed **after** the rule was applied — their install broadcast
    has already gone out. Apply first.
 2. Notifications posted by the hidden app (system_server posts them).
-3. `dumpsys package` **as root**.
+3. `dumpsys`-style output. `dumpsys` passes a file descriptor and
+   `system_server` writes the dump into it directly; that stream never becomes a
+   binder parcel, so the L1 filter does not see it (this includes
+   `dumpsys package` and `cmd activity`). Covering it would need a read-side
+   content redactor, which is a different (and much heavier) mechanism.
 4. `Play Integrity` verdicts and anything server-side.
 5. Files the hidden app writes into shared storage (`/sdcard/Download/...`) —
    only `/data/media/*/Android/data/<pkg>` is hidden.
