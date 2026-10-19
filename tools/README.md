@@ -10,6 +10,10 @@ Two kinds of things live here:
 - `patchcheck.sh` — verifies that `patches/xechide-core.patch` still applies to
   the pinned stock KernelSU commit without downloading the whole history. CI
   runs the same check.
+- `abi_check.py` — cross-checks the packed ABI everywhere it is encoded (the
+  kernel header, the manager's Kotlin constants and codec stride, the helper's
+  ioctl numbers, the patch, the protocol doc, and the package-name charset).
+  This is the check that would have caught the rule-stride bug by itself.
 
 ```
 sh tools/probe.sh com.example.hidden
