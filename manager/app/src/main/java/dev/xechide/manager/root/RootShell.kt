@@ -69,19 +69,7 @@ object RootShell {
             Callable { readAll(process.errorStream) },
         )
         val stdinFuture: Future<String?> = streamExecutor.submit(
-            Callable<String?> {
-                try {
-                    process.outputStream.use { output ->
-                        if (stdin != null && stdin.isNotEmpty()) {
-                            output.write(stdin)
-                        }
-                        output.flush()
-                    }
-                    null
-                } catch (error: IOException) {
-                    "could not write stdin: ${error.message ?: error.javaClass.simpleName}"
-                }
-            },
+            Callable { writeStdin(process, stdin) },
         )
 
         val effectiveTimeout = max(1L, timeoutSeconds)
@@ -124,7 +112,7 @@ object RootShell {
                 append("stdin: ").append(stdinError)
             }
             if (timedOut) {
-                if (isNotEmpty() && !endsWith('\n')) append('\n')
+                if (isNotEmpty() && !endsWith("\n")) append('\n')
                 append("su command timed out after ")
                     .append(effectiveTimeout)
                     .append("s and was killed")
@@ -136,6 +124,20 @@ object RootShell {
 
     /** Quote one argument for the POSIX shell that `su -c` will start. */
     fun shellQuote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+
+    private fun writeStdin(process: Process, stdin: ByteArray?): String? {
+        return try {
+            process.outputStream.use { output ->
+                if (stdin != null && stdin.isNotEmpty()) {
+                    output.write(stdin)
+                }
+                output.flush()
+            }
+            null
+        } catch (error: IOException) {
+            "could not write stdin: ${error.message ?: error.javaClass.simpleName}"
+        }
+    }
 
     private fun readAll(stream: InputStream): String {
         return try {
