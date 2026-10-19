@@ -25,6 +25,30 @@ static int checks;
 
 /* --------------------------------------------------------------- builders --- */
 
+
+/* memmem is GNU-only and absent from the MinGW libc CI/zig use; keep the test
+ * portable. */
+static int contains(const unsigned char *buf, unsigned int len, const char *needle, unsigned int n)
+{
+	unsigned int i, k;
+
+	if (n == 0 || len < n)
+		return 0;
+	/* String8 */
+	for (i = 0; i + n <= len; i++)
+		if (memcmp(buf + i, needle, n) == 0)
+			return 1;
+	/* String16 */
+	for (i = 0; i + 2 * n <= len; i++) {
+		for (k = 0; k < n; k++)
+			if (buf[i + 2 * k] != (unsigned char)needle[k] || buf[i + 2 * k + 1] != 0)
+				break;
+		if (k == n)
+			return 1;
+	}
+	return 0;
+}
+
 static unsigned int put_u32(unsigned char *b, unsigned int off, unsigned int v)
 {
 	memcpy(b + off, &v, 4);
@@ -151,9 +175,9 @@ static void test_list_removal_str16(void)
 	if (new_len) {
 		memcpy(&count, buf + 4, 4);
 		CHECK(count == 2);
-		CHECK(memmem(buf, new_len, HIDDEN, 18) == NULL);
-		CHECK(memmem(buf, new_len, "com.example.visible", 19) != NULL);
-		CHECK(memmem(buf, new_len, "com.android.other", 17) != NULL);
+		CHECK(!contains(buf, new_len, HIDDEN, 18));
+		CHECK(contains(buf, new_len, "com.example.visible", 19));
+		CHECK(contains(buf, new_len, "com.android.other", 17));
 	}
 }
 
@@ -173,7 +197,7 @@ static void test_list_removal_str8(void)
 	if (new_len) {
 		memcpy(&count, buf + 4, 4);
 		CHECK(count == 1);
-		CHECK(memmem(buf, new_len, HIDDEN, 18) == NULL);
+		CHECK(!contains(buf, new_len, HIDDEN, 18));
 	}
 }
 
@@ -194,7 +218,7 @@ static void test_string_array(void)
 	if (new_len) {
 		memcpy(&count, buf + 4, 4);
 		CHECK(count == 1);
-		CHECK(memmem(buf, new_len, "com.android.other", 17) != NULL);
+		CHECK(contains(buf, new_len, "com.android.other", 17));
 	}
 }
 
@@ -214,8 +238,8 @@ static void test_substitution_fallback(void)
 	CHECK(mode == XE_PARCEL_REWRITTEN);
 	CHECK(new_len == len); /* layout must not change */
 	CHECK(memcmp(buf, head, 8) == 0);
-	CHECK(memmem(buf, len, HIDDEN, 18) == NULL);
-	CHECK(memmem(buf, len, "com.example.visible", 19) != NULL);
+	CHECK(!contains(buf, len, HIDDEN, 18));
+	CHECK(contains(buf, len, "com.example.visible", 19));
 }
 
 /* Requests are not lists: same in-place rename, no structural change. */
@@ -232,8 +256,8 @@ static void test_request_rename(void)
 	new_len = xe_parcel_filter(buf, len, k_names, 1, &mode);
 	CHECK(mode == XE_PARCEL_REWRITTEN);
 	CHECK(new_len == len);
-	CHECK(memmem(buf, len, HIDDEN, 18) == NULL);
-	CHECK(memmem(buf, len, "android.content.pm.IPackageManager", 34) != NULL);
+	CHECK(!contains(buf, len, HIDDEN, 18));
+	CHECK(contains(buf, len, "android.content.pm.IPackageManager", 34));
 }
 
 static void test_negative(void)
