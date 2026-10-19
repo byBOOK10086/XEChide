@@ -29,6 +29,11 @@ struct xechide_config {
 };
 ```
 
+Packed size: `4 x 4 + 64 x (3 x 4 + 128) = 16 + 64 x 140 = 8976` bytes,
+little-endian, no padding (`__attribute__((packed))`). `xechide-ctl set` refuses
+any stdin that is not exactly that size, and `tools/abi_check.py` cross-checks
+the numbers in this document, the header, the Kotlin codec and the helper.
+
 ```
 XECHIDE_RF_PATHS   0x1   hide the app's files (L0)
 XECHIDE_RF_PROC    0x2   hide the app's processes (L0)
