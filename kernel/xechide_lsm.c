@@ -123,6 +123,15 @@ static unsigned int dir_kind(struct file *file, char *buf, int len)
 	return XE_DIR_NONE;
 }
 
+/* Cheap gate for every hook: a uid with rules, or a filesystem that carries
+ * the project's own hidden path while self-hiding is enabled. */
+static bool xe_active(u32 uid, const struct super_block *sb)
+{
+	if (xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
+		return true;
+	return xechide_self_hide_enabled() && xechide_on_adb_sb(sb);
+}
+
 /* ------------------------------------------------------------- L0 hooks --- */
 
 /* Filled in by xechide_lsm_init(); the originals are called for everything we
@@ -141,7 +150,7 @@ static int xe_inode_permission(struct inode *inode, int mask)
 
 	if (!xechide_enabled || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
 		goto orig;
-	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
+	if (!xe_active(uid, inode->i_sb))
 		goto orig;
 
 	d = d_find_alias(inode);
@@ -170,7 +179,7 @@ static int xe_inode_getattr(const struct path *path)
 	u32 uid = current_uid().val;
 	char buf[XE_PATH_MAX];
 
-	if (xechide_enabled && path && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
+	if (xechide_enabled && path && xe_active(uid, path->dentry->d_sb)) {
 		const char *p = xe_dentry_path(path->dentry, buf, sizeof(buf));
 
 		if (p && xechide_hide_path(uid, p)) {
@@ -190,7 +199,7 @@ static int xe_file_permission(struct file *file, int mask)
 	char buf[XE_PATH_MAX];
 
 	if (xechide_enabled && file && (mask & (MAY_READ | MAY_EXEC)) &&
-	    xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC)) {
+	    xe_active(uid, file->f_path.dentry->d_sb)) {
 		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
 
 		if (p && xechide_hide_path(uid, p)) {
@@ -209,7 +218,7 @@ static int xe_file_open(struct file *file)
 	u32 uid = current_uid().val;
 	char buf[XE_PATH_MAX];
 
-	if (xechide_enabled && file && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
+	if (xechide_enabled && file && xe_active(uid, file->f_path.dentry->d_sb)) {
 		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
 
 		if (p && xechide_hide_path(uid, p)) {
@@ -289,7 +298,7 @@ static int xe_iter_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 	st->swapped = 0;
 	if (!xechide_enabled || !ctx || !ctx->actor || !file)
 		return 1;
-	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
+	if (!xe_active(uid, file->f_path.dentry->d_sb))
 		return 1;
 
 	kind = dir_kind(file, buf, sizeof(buf));
