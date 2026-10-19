@@ -5,10 +5,10 @@
  * Two probes, no binder-internal struct layout, no KMI-specific code:
  *
  *   binder_transaction (request) - current is the caller, so current_uid() is
- *                                  the target uid. If the parcel carries the
- *                                  PackageManager interface token, the thread
- *                                  is marked and hidden package names inside
- *                                  the request are renamed in place.
+ *                                  the target uid. If the parcel carries one of
+ *                                  the system-service interface tokens, the
+ *                                  thread is marked and hidden package names
+ *                                  inside the request are renamed in place.
  *
  *   binder_thread_read (reply)   - current is the caller again. If the thread
  *                                  is marked and the buffer contains BR_REPLY,
@@ -169,6 +169,29 @@ static bool parcel_has_token(const unsigned char *buf, unsigned int len, const c
 	return false;
 }
 
+/*
+ * System services whose parcels may carry a package name. The interface token
+ * is the first string of every AIDL request, so matching it costs one bounded
+ * scan and needs no transaction-number table.
+ */
+static const char *const xe_service_tokens[] = {
+	"android.content.pm.IPackageManager",
+	"android.app.IActivityManager",
+	"android.app.IActivityTaskManager",
+	"android.app.usage.IUsageStatsManager",
+	"com.android.internal.app.IAppOpsService",
+};
+
+static bool parcel_names_service(const unsigned char *buf, unsigned int len)
+{
+	int i;
+
+	for (i = 0; i < (int)ARRAY_SIZE(xe_service_tokens); i++)
+		if (parcel_has_token(buf, len, xe_service_tokens[i]))
+			return true;
+	return false;
+}
+
 /* --------------------------------------------------------- request probe --- */
 
 static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
@@ -205,7 +228,7 @@ static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
 			spin_unlock_irqrestore(&xe_buf_lock, flags);
 			return 0;
 		}
-		if (!parcel_has_token(xe_parcel_buf, head, "android.content.pm.IPackageManager")) {
+		if (!parcel_names_service(xe_parcel_buf, head)) {
 			spin_unlock_irqrestore(&xe_buf_lock, flags);
 			return 0;
 		}
