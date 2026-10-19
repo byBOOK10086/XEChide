@@ -187,18 +187,34 @@ static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
 		return 0;
 
 	size = (unsigned int)tr->data_size;
-	if (size < 8 || size > XE_TOKEN_SCAN * 8)
+	if (size < 8 || size > XE_PARCEL_MAX)
 		return 0;
 
 	if (!spin_trylock_irqsave(&xe_buf_lock, flags))
 		return 0;
-	if (copy_from_user_nofault(xe_parcel_buf, (void __user *)tr->data.ptr.buffer, size)) {
-		spin_unlock_irqrestore(&xe_buf_lock, flags);
-		return 0;
-	}
-	if (!parcel_has_token(xe_parcel_buf, size, "android.content.pm.IPackageManager")) {
-		spin_unlock_irqrestore(&xe_buf_lock, flags);
-		return 0;
+	/*
+	 * Most transactions from a target uid are not PackageManager calls. Read
+	 * only the head first: the interface token is the first string of the
+	 * parcel, so a 1 KiB probe answers the question without copying the whole
+	 * payload.
+	 */
+	{
+		unsigned int head = size < XE_TOKEN_SCAN ? size : XE_TOKEN_SCAN;
+
+		if (copy_from_user_nofault(xe_parcel_buf, (void __user *)tr->data.ptr.buffer, head)) {
+			spin_unlock_irqrestore(&xe_buf_lock, flags);
+			return 0;
+		}
+		if (!parcel_has_token(xe_parcel_buf, head, "android.content.pm.IPackageManager")) {
+			spin_unlock_irqrestore(&xe_buf_lock, flags);
+			return 0;
+		}
+		if (head < size &&
+		    copy_from_user_nofault(xe_parcel_buf + head, (char __user *)tr->data.ptr.buffer + head,
+					   size - head)) {
+			spin_unlock_irqrestore(&xe_buf_lock, flags);
+			return 0;
+		}
 	}
 
 	new_len = xechide_filter_parcel(uid, xe_parcel_buf, size, &mode);
