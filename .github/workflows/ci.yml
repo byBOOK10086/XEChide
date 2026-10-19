@@ -4,6 +4,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   host-tests:
     name: host tests (matching + parcel)
@@ -27,6 +31,28 @@ jobs:
         run: |
           "$RUNNER_TEMP/xechide-ctl" version
           "$RUNNER_TEMP/xechide-ctl" --help || test $? -eq 2
+
+  helper-aarch64:
+    name: root helper (arm64 static)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch zig (bundled clang + musl)
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+
+      - name: Build xechide-ctl
+        run: |
+          "$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" cc             -target aarch64-linux-musl -static -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE             -o xechide-ctl-arm64 ctl/xechide-ctl.c
+          file xechide-ctl-arm64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xechide-ctl-arm64
+          path: xechide-ctl-arm64
+          if-no-files-found: error
 
   patch-apply:
     name: patch applies to stock KernelSU
