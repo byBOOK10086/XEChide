@@ -60,27 +60,29 @@ class SecureStore(context: Context) {
         }
     }
 
-    private fun getOrCreateKey(): SecretKey = synchronized(KEY_LOCK) {
-        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        val existing = keyStore.getEntry(KEY_ALIAS, null)
-        if (existing is KeyStore.SecretKeyEntry) {
-            return@synchronized existing.secretKey
+    private fun getOrCreateKey(): SecretKey {
+        return synchronized(KEY_LOCK) {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val existing = keyStore.getEntry(KEY_ALIAS, null)
+            if (existing is KeyStore.SecretKeyEntry) {
+                existing.secretKey
+            } else {
+                val generator = KeyGenerator.getInstance(
+                    KeyProperties.KEY_ALGORITHM_AES,
+                    ANDROID_KEYSTORE,
+                )
+                val specification = KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build()
+                generator.init(specification)
+                generator.generateKey()
+            }
         }
-
-        val generator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            ANDROID_KEYSTORE,
-        )
-        val specification = KeyGenParameterSpec.Builder(
-            KEY_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .build()
-        generator.init(specification)
-        generator.generateKey()
     }
 
     private companion object {
