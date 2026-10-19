@@ -57,11 +57,12 @@ adb shell su -c '/data/adb/xechide/bin/xechide-ctl stats'
 adb shell su -c 'pm list packages | grep com.example.hidden'
   expect: the package is listed. XEChide does not and cannot hide from root.
 
-### 2.8 process / task lists (new)
-adb shell dumpsys activity processes | grep com.example.hidden
-  expect: no output (the reply is filtered on IActivityManager)
+### 2.8 process lists
 adb shell ps -A | grep com.example.hidden
   expect: no output (readdir of /proc is filtered)
+
+`dumpsys` is NOT covered: it writes into a file descriptor, not a parcel.
+Do not use it as a leak test; see SECURITY.md item 3.
 
 ### 2.9 the package database is not a bypass
 adb shell cat /data/system/packages.list | grep com.example.hidden
