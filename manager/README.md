@@ -42,7 +42,7 @@ The versions are pinned in `build.gradle.kts` / `app/build.gradle.kts`:
 | Item | Version |
 |---|---|
 | Android Gradle Plugin | 8.7.3 |
-| Gradle | 8.9 or newer |
+| Gradle | 8.9 |
 | Kotlin / Compose compiler plugin | 2.0.21 |
 | Compose BOM | 2024.09.03 |
 | JDK | 17 |
@@ -58,9 +58,8 @@ cd manager
 gradle :app:assembleDebug
 ```
 
-Install/dependencies resolve from `google()` and `mavenCentral()`; this source
-was written without network access, so nothing in the tree depends on a local
-Maven mirror.
+Install/dependencies resolve from `google()` and `mavenCentral()`; no local
+Maven mirror is configured.
 
 ### Produce and bundle the helper (required)
 
