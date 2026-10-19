@@ -63,7 +63,7 @@ object ConfigCodec {
             }
             require(
                 rule.targetUid == XECHIDE_UID_ALL ||
-                    (rule.targetUid > 0 && rule.targetUid != 1000),
+                    (rule.targetUid > 0 && rule.targetUid != 1000)
             ) {
                 "invalid target uid ${rule.targetUid}"
             }
@@ -75,10 +75,14 @@ object ConfigCodec {
             buffer.putInt(rule.hiddenUid)
             buffer.putInt(flags)
             buffer.put(packageBytes)
-            // Remainder of pkg[128] is already zero.
+            // pkg[128] is fixed-width: skip to the next rule boundary, the bytes
+            // in between stay zero because the backing array was zero-filled.
+            buffer.position(buffer.position() + (XECHIDE_PKG_LEN - packageBytes.size))
         }
 
-        check(buffer.position() <= PACKED_BYTES)
+        check(buffer.position() == HEADER_BYTES + rules.size * RULE_BYTES) {
+            "packed layout drift: ${buffer.position()} bytes for ${rules.size} rules"
+        }
         return bytes
     }
 
