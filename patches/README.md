@@ -1,33 +1,37 @@
 # Patches
 
-XEChide's kernel part is a **self-contained patch set**, not a fork. Two files:
-
-| File | Applies to |
-|---|---|
-| `xechide-core.patch` | stock KernelSU kernel tree (`kernel/` of `tiann/KernelSU`) on a GKI 5.10 / 5.15 / 6.1 / 6.6 kernel: adds `kernel/xechide.c`, `kernel/xechide.h`, the Kbuild line, the LSM hook calls, and the two supercall entries |
-| `xechide-binder-<kmi>.patch` | the per-KMI binder filter (`binder.c` differs between 5.10/5.15/6.1/6.6); applied only for the KMI you build |
-
-`xechide-core.patch` is the part that works today (rule engine + LSM layer);
-the binder patches are written per KMI because `binder_transaction` has a
-different signature on each, and each patch registers its kprobe in a
-**fail-open** way: if the registration fails, the device keeps working with the
-file layer only (audited via `dmesg`).
-
-## What the core patch changes
+XEChide's kernel part is one **self-contained patch**, not a fork:
 
 ```
-kernel/Kbuild                     + kernelsu-objs += xechide.o
-kernel/xechide.c                  new (rule engine, RCU config, hot-path match)
-kernel/xechide.h                  new (prototypes)
-kernel/core/init.c                + xechide_init() / xechide_clear()
-kernel/hook/lsm_hook.c            + xechide_inode_permission / _getattr / filldir
-kernel/supercall/dispatch.c       + KSU_IOCTL_XECHIDE_GET / _SET
-uapi/supercall.h                  + the two ioctls and struct xechide_cmd
+patches/xechide-core.patch
 ```
 
-No Kconfig symbol, no new module, no external dependency. The patch keeps
-XEChide **inside `kernelsu.ko`** on purpose: a separate `.ko` shows up in
-`/proc/modules` and `/sys/module`, which is a fingerprint.
+It applies to stock KernelSU (`tiann/KernelSU`) at
+`0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2` and adds:
+
+```
+kernel/Kbuild                + five objects under kernel/xechide/
+kernel/xechide/xechide.h        ABI + internal API (new)
+kernel/xechide/xechide_core.c   rule engine, RCU config, /proc check, ioctls (new)
+kernel/xechide/xechide_match.c  pure path/dirent matching (new)
+kernel/xechide/xechide_parcel.c pure binder parcel rewriting (new)
+kernel/xechide/xechide_lsm.c    L0 hooks + readdir filter (new)
+kernel/xechide/xechide_binder.c L1 probes (new)
+kernel/core/init.c           + xechide_init()/_lsm_init()/_binder_init() and the exit path
+kernel/supercall/dispatch.c  + the three ioctl handlers
+uapi/supercall.h             + 0xE0..0xE2
+```
+
+There is **no per-KMI patch**. The binder layer never reads a binder-internal
+structure: it works on the UAPI `binder_transaction_data` and on the read
+stream, both of which are stable, and `current_uid()` identifies the target.
+The LSM layer is version-guarded (`inode_permission` lost its `mnt_userns`
+argument in 6.5) and everything else goes through KernelSU's own
+`ksu_lsm_hook()`.
+
+No Kconfig symbol, no new module, no external dependency. XEChide stays
+**inside `kernelsu.ko`** on purpose: a separate `.ko` shows up in
+`/proc/modules` and `/sys/module`, which is a fingerprint by itself.
 
 ## Claimed ABI
 
@@ -35,27 +39,32 @@ XEChide owns a documented slice of the supercall ioctl space so several
 KernelSU-based projects can coexist on one kernel:
 
 ```
-KSU_IOCTL_XECHIDE_GET   = _IOC(_IOC_READ,  'K', 0xE0, 0)
-KSU_IOCTL_XECHIDE_SET   = _IOC(_IOC_WRITE, 'K', 0xE1, 0)
+KSU_IOCTL_XECHIDE_GET   = _IOC(_IOC_READ,  'K', 0xE0, 0)   /* struct xechide_config  */
+KSU_IOCTL_XECHIDE_SET   = _IOC(_IOC_WRITE, 'K', 0xE1, 0)   /* struct xechide_config  */
+KSU_IOCTL_XECHIDE_STATS = _IOC(_IOC_READ,  'K', 0xE2, 0)   /* struct xechide_stats   */
 ```
 
-Both are `perm = only_manager`: only the KernelSU manager (the authenticated
-app) may call them. The manager talks to these ioctls **directly over the
-KernelSU fd with its own JNI** — it does not need `ksud`, and it does not import
-anything from any fork.
+All three are `perm_check = only_root`, and that is deliberate: a standalone
+app cannot be the KernelSU manager, so the manager app drives a small root
+helper (`ctl/`) that installs a driver descriptor through the legacy
+`reboot(KSU_INSTALL_MAGIC1, KSU_INSTALL_MAGIC2, ...)` path and then issues the
+ioctls. Nothing from any fork is imported.
 
 ## Build matrix
 
-| KMI | core | binder |
+| KMI | L0 (LSM + readdir) | L1 (binder) |
 |---|---|---|
-| android12-5.10 | ✓ | todo |
-| android13-5.10 | ✓ | todo |
-| android13-5.15 | ✓ | todo |
-| android14-5.15 | ✓ | todo |
-| android14-6.1 | ✓ | todo |
-| android15-6.6 | ✓ | todo |
-| android16-6.12 | ✓ | todo |
-| android17-6.18 | ✓ | todo |
+| android12-5.10 | guarded | UAPI only |
+| android13-5.10 | guarded | UAPI only |
+| android13-5.15 | guarded | UAPI only |
+| android14-5.15 | guarded | UAPI only |
+| android14-6.1 | guarded | UAPI only |
+| android15-6.6 | guarded | UAPI only |
+| android16-6.12 | `ksu_lsm_hook` handles static calls | UAPI only |
+| android17-6.18 | `ksu_lsm_hook` handles static calls | UAPI only |
+
+Each hook installs independently and fails open: a kernel without
+`selinux_inode_permission` in kallsyms still boots and hides nothing there.
 
 ## Rules for patch contributions
 
@@ -63,4 +72,17 @@ anything from any fork.
 - Reads only; writes always allowed.
 - Deny returns `-ENOENT`, never `-EACCES`.
 - Every hook must pass through untouched on any malformed input.
-- A new file must not change behaviour when `n_rules == 0`.
+- A configuration with `n_rules == 0` must change no behaviour at all.
+
+## Applying
+
+```
+git clone https://github.com/tiann/KernelSU.git
+cd KernelSU
+git checkout 0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2
+git apply /path/to/xechide-core.patch
+# then build the kernel/module with your usual GKI flow
+```
+
+`tests/README.md` has the exact commands CI runs to prove the patch still
+applies.
