@@ -8,8 +8,11 @@ before a detector ever sees them. Lower level than HMA-oss.
 > its own config format. It does not depend on, share code with, or ship inside
 > any other KernelSU fork or module.
 
-Status: design + working kernel rule engine (2026-10). Two pieces remain: the
-per-KMI binder filter and the manager app.
+Status (2026-10): the kernel side is written and self-contained - one patch,
+L0 (four LSM entries + a readdir filter) and L1 (two binder probes), no per-KMI
+code, host tests for the pure matching/parcel code. The manager app and the
+root helper are the remaining pieces; nothing has been verified on a device
+yet, and the docs say so instead of pretending otherwise.
 
 ## Why another hiding tool
 
@@ -57,11 +60,15 @@ docs/        design, threat model, verification
 
 ## Install (once built)
 
-1. **Kernel**: apply `patches/xechide-*.patch` to your KernelSU kernel source and
-   build the image as usual (`patches/README.md` lists the supported KMIs).
+1. **Kernel**: apply `patches/xechide-core.patch` to your KernelSU kernel source
+   and build the image as usual (`patches/README.md` has the exact base commit).
 2. **Manager**: install `manager/` (package `dev.xechide.manager`), pick hidden
    packages and the apps that must not see them, apply.
 3. **Verify**: `tools/probe/` reproduces what a detector sees on your device.
+
+The manager cannot talk to the kernel by itself - only the KernelSU manager
+holds a driver descriptor - so it drives a small root helper (`ctl/`) that
+installs one and pushes the configuration.
 
 ## License
 
