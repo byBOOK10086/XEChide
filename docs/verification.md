@@ -11,6 +11,8 @@ table, the second table is a checklist for a human with a phone.
 | pure logic | `make -C tests/host` | path/dirent matching and parcel rewriting behave as specified on real parcel layouts |
 | patch | `tools/patchcheck.sh` | `patches/xechide-core.patch` applies to stock KernelSU `0faec0cc7b5f...` |
 | helper | `cc -std=c11 -Wall -Wextra -Werror ctl/xechide-ctl.c` | the ioctl ABI and the packed struct compile without warnings |
+| ABI | `python3 tools/abi_check.py` | the kernel header, the Kotlin codec, the helper and the patch all agree on numbers, sizes and the package-name charset |
+| arm64 helper | zig `-target aarch64-linux-musl -static` | the helper really builds for the target the APK bundles |
 
 CI cannot compile the LSM/kprobe glue: that needs a kernel tree per KMI. The
 first build is the acceptance test for those files.
