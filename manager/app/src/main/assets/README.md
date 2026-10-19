@@ -35,10 +35,11 @@ On a multi-config generator (for example Visual Studio on Windows), the output
 is under `build-ctl/Release/`. Copy the built ELF binary, not the host build
 from the CI sanity check.
 
-Check that the APK really contains the file:
+Check that the APK really contains the file (the exact APK name depends on
+whether the release build is signed):
 
 ```sh
-unzip -l manager/app/build/outputs/apk/release/app-release.apk \
+unzip -l manager/app/build/outputs/apk/release/app-release*.apk \
   | grep 'assets/xechide-ctl-arm64'
 ```
 
