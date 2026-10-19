@@ -14,6 +14,8 @@ filters the data before the app can see it.
 | How is a package hidden from `getInstalledPackages`? | Java hook on `PackageManagerService` (or the app's `ApplicationPackageManager`), returns a filtered list | the kernel rewrites the **binder reply parcel** of the target's own call (L1) |
 | How is a direct query hidden (`getPackageInfo`, `getApplicationInfo`)? | the same Java hook | the kernel renames the package inside the **request** parcel, so PMS itself answers "not found" (L1) |
 | How is the app's directory hidden? | usually not at all; some versions hide the launcher entry | LSM denies **target → /data/app/<pkg>**, and the readdir filter drops the entry (L0) |
+| How are process/task lists hidden? | usually out of scope for the module | the same parcel filter covers `IActivityManager`, `IActivityTaskManager`, `IUsageStatsManager`, `IAppOpsService`, including `pkg:remote` process names (L1) |
+| How is the package database protected? | file is untouched | `/data/system/packages.list` and `packages.xml` are denied for target uids, so parsing the database cannot bypass the binder filter (L0) |
 | What does the target's process contain? | the hook framework, the Xposed module, a modified ART method | **nothing** |
 | Can the target detect it from inside? | yes: `maps`, ART headers, JNI table, `getDeclaredMethods` anomalies | no: the process is stock |
 | Does it break on a framework update? | needs a new hook signature | no code table is involved: the selector is the `IPackageManager` interface token and the parcel shape |
