@@ -1,6 +1,7 @@
 package dev.xechide.manager.root
 
 import android.content.Context
+import dev.xechide.manager.R
 import java.io.FileNotFoundException
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
