@@ -66,21 +66,27 @@ published with `rcu_assign_pointer`.
 pushed yet. `STATS` returns `struct xechide_stats` (path/dirent/proc hits,
 parcel rebuilt/rewritten/skipped counters, installed hooks).
 
-## Persistence (helper side)
+## Persistence (manager side)
 
-The kernel deliberately does not keep the configuration across reboots: a
-kernel-side file parser is attack surface, and a stale list would hide the
-wrong package after a reinstall.
+The kernel deliberately keeps no configuration across reboots: a kernel-side
+file parser is attack surface, and a stale list would hide the wrong package
+after a reinstall. The helper is stateless too.
 
-- `/data/adb/xechide/cfg.bin`, mode 0600, owner root.
-- AES-256-GCM, nonce prepended, key = 32 random bytes generated once at
-  install time and stored next to the helper.
-- Written by the manager, replayed at boot by the helper.
-- Missing or undecryptable → empty configuration → **nothing is hidden**.
+- The manager stores the rule list in its own private directory, encrypted with
+  an **Android Keystore** AES-GCM key (`EncryptedSharedPreferences`-equivalent).
+  Crypto is the platform's job; the helper never sees a key.
+- At boot the manager's `BOOT_COMPLETED` receiver reads it, builds the struct
+  and pipes it into `xechide-ctl set` through `su`.
+- Missing, locked or undecryptable → empty configuration → nothing is hidden.
+
+The only thing ever written to `/data/adb` is the helper binary itself
+(`/data/adb/xechide/bin/xechide-ctl`), hidden from all non-root uids by the
+kernel's self-hiding rule.
 
 ## Boot
 
 1. Kernel boots with `n_rules == 0`; the hooks are installed but match nothing.
-2. `post-fs-data` runs the helper, which decrypts `cfg.bin` and issues one `SET`.
+2. `BOOT_COMPLETED` → the manager pushes the stored configuration with one
+   `SET`.
 3. Until then nothing is hidden - by design: a failed hide is a bug report, a
    wrong deny is a bricked device.
