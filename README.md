@@ -52,10 +52,13 @@ comparison with HMA-oss: [`docs/comparison-hma.md`](docs/comparison-hma.md).
 ## Repository layout
 
 ```
-patches/     unified diff against stock KernelSU + GKI kernels (the kernel part)
-manager/     standalone Android app (own package id, own JNI, no shared code)
+patches/     one unified diff against stock KernelSU (the whole kernel part)
+kernel/      the sources that diff adds: rule engine, LSM layer, binder layer
+ctl/         root helper: the only user of the three ioctls
+manager/     standalone Android app (own package id, own code, no shared code)
 tools/       verification scripts: what a detector can still see
-docs/        design, threat model, verification
+tests/       host tests for the matching/parcel code, run by CI
+docs/        design, threat model, config protocol
 ```
 
 ## Install (once built)
@@ -65,6 +68,12 @@ docs/        design, threat model, verification
 2. **Manager**: install `manager/` (package `dev.xechide.manager`), pick hidden
    packages and the apps that must not see them, apply.
 3. **Verify**: `tools/probe/` reproduces what a detector sees on your device.
+
+The kernel part is verified by CI in two ways: the pure matching/parcel code is
+compiled and executed on the host, and the patch is checked against the pinned
+stock KernelSU commit. The LSM/kprobe glue needs a real kernel tree to compile;
+that is the acceptance test on the build machine, not something this repository
+claims to have run.
 
 The manager cannot talk to the kernel by itself - only the KernelSU manager
 holds a driver descriptor - so it drives a small root helper (`ctl/`) that
