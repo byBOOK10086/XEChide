@@ -15,8 +15,8 @@ copies it to `/data/adb/xechide/bin/xechide-ctl` and verifies `test -x`.
 
 ## Producing the asset
 
-From the repository root, with an NDK installed (tested by the project for the
-`arm64-v8a` ABI only):
+From the repository root, with an NDK installed. The only targeted ABI is
+`arm64-v8a`; no on-device verification has been performed in this repository:
 
 ```sh
 cmake -S ctl -B build-ctl \
