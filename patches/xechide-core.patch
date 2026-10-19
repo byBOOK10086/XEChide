@@ -1,0 +1,2282 @@
+diff --git a/kernel/Kbuild b/kernel/Kbuild
+index ee5af0b..c463b21 100644
+--- a/kernel/Kbuild
++++ b/kernel/Kbuild
+@@ -56,6 +56,15 @@ kernelsu-objs += feature/adb_root.o
+ kernelsu-objs += feature/selinux_hide.o
+ kernelsu-objs += feature/shell_su_adb_only.o
+ 
++# XEChide - kernel-level app/path hiding, see kernel/xechide/README.md.
++# Always linked; behaviour is off until a configuration is pushed through
++# KSU_IOCTL_XECHIDE_SET, so an unused build costs a few tens of KB.
++kernelsu-objs += xechide/xechide_core.o
++kernelsu-objs += xechide/xechide_match.o
++kernelsu-objs += xechide/xechide_parcel.o
++kernelsu-objs += xechide/xechide_lsm.o
++kernelsu-objs += xechide/xechide_binder.o
++
+ ifdef KBUILD_EXTMOD
+ ifeq ($(CONFIG_KSU_DISABLE_MANAGER),y)
+ ccflags-y += -DCONFIG_KSU_DISABLE_MANAGER=1
+diff --git a/kernel/core/init.c b/kernel/core/init.c
+index 6ee1c35..959f89f 100644
+--- a/kernel/core/init.c
++++ b/kernel/core/init.c
+@@ -25,6 +25,7 @@
+ #include "hook/syscall_hook.h"
+ #include "feature/adb_root.h"
+ #include "feature/selinux_hide.h"
++#include "xechide/xechide.h"
+ #include "feature/module_blacklist.h"
+ #include "feature/shell_su_adb_only.h"
+ #include "infra/symbol_resolver.h"
+@@ -148,6 +149,13 @@ int __init kernelsu_init(void)
+     ksu_selinux_hide_init();
+     ksu_shell_su_adb_only_init();
+ 
++    /* XEChide: rule engine first, then the two enforcement layers. Both hook
++     * installers fail open, so a kernel without the expected symbols still
++     * boots and simply hides nothing. */
++    xechide_init();
++    xechide_lsm_init();
++    xechide_binder_init();
++
+     ksu_supercalls_init();
+     ksu_app_profile_init();
+ 
+@@ -207,6 +215,9 @@ int __init kernelsu_init(void)
+ void __exit kernelsu_exit(void)
+ {
+     // Phase 1: Stop all hooks first to prevent new callbacks
++    xechide_binder_exit();
++    xechide_lsm_exit();
++    xechide_remove();
+     ksu_syscall_hook_manager_exit();
+ 
+     ksu_supercalls_exit();
+diff --git a/kernel/supercall/dispatch.c b/kernel/supercall/dispatch.c
+index 13c9c59..325affd 100644
+--- a/kernel/supercall/dispatch.c
++++ b/kernel/supercall/dispatch.c
+@@ -18,6 +18,7 @@
+ #include "feature/kernel_umount.h"
+ #include "manager/manager_identity.h"
+ #include "selinux/selinux.h"
++#include "xechide/xechide.h"
+ #include "infra/file_wrapper.h"
+ #include "hook/tp_marker.h"
+ #include "policy/app_profile.h"
+@@ -801,6 +802,29 @@ out:
+     return ret;
+ }
+ 
++/* XEChide. The configuration is root-only: a standalone app cannot be the
++ * KernelSU manager, so the manager app drives a small root helper that owns
++ * the driver descriptor. */
++static int do_xechide_get(void __user *arg)
++{
++    return xechide_ioctl_get(arg);
++}
++
++static int do_xechide_set(void __user *arg)
++{
++    return xechide_ioctl_set(arg);
++}
++
++static int do_xechide_stats(void __user *arg)
++{
++    struct xechide_stats st;
++
++    if (!arg)
++        return -EINVAL;
++    xechide_get_stats(&st);
++    return copy_to_user(arg, &st, sizeof(st)) ? -EFAULT : 0;
++}
++
+ // IOCTL handlers mapping table
+ // clang-format off
+ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
+@@ -956,6 +980,24 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
+         .handler = do_lookup_symbols,
+         .perm_check = only_root
+     },
++    {
++        .cmd = KSU_IOCTL_XECHIDE_GET,
++        .name = "XECHIDE_GET",
++        .handler = do_xechide_get,
++        .perm_check = only_root
++    },
++    {
++        .cmd = KSU_IOCTL_XECHIDE_SET,
++        .name = "XECHIDE_SET",
++        .handler = do_xechide_set,
++        .perm_check = only_root
++    },
++    {
++        .cmd = KSU_IOCTL_XECHIDE_STATS,
++        .name = "XECHIDE_STATS",
++        .handler = do_xechide_stats,
++        .perm_check = only_root
++    },
+     {
+         .cmd = 0,
+         .name = NULL,
+diff --git a/new/kernel/xechide/README.md b/kernel/xechide/README.md
+new file mode 100644
+index 0000000..c387579
+--- /dev/null
++++ b/kernel/xechide/README.md
+@@ -0,0 +1,75 @@
++# kernel/ — the module side
++
++These five files are compiled into `kernelsu.ko` (or the built-in module) by
++`patches/xechide-core.patch`. They are the whole enforcement path: no daemon,
++no userspace process.
++
++| File | Role |
++|---|---|
++| `xechide.h` | ABI (`struct xechide_config`) + internal API. Shared verbatim with `ctl/` and `manager/`. |
++| `xechide_core.c` | Rule storage (RCU swap), uid gate, `/proc` ownership check, config validation, ioctls. |
++| `xechide_match.c` | Pure path/readdir matching. Compiled into the host test suite as-is. |
++| `xechide_parcel.c` | Pure binder parcel rewriting. Compiled into the host test suite as-is. |
++| `xechide_lsm.c` | L0: four LSM entries + the `iterate_dir` readdir filter. |
++| `xechide_binder.c` | L1: `binder_transaction` / `binder_thread_read` probes, thread marks. |
++
++## Hook points, and why
++
++**L0 (files).** There is no `inode_readdir` LSM hook, so two mechanisms are
++used:
++
++- `inode_permission`, `inode_getattr`, `file_permission`, `file_open` are
++  replaced through `ksu_lsm_hook()`. The replacement runs first and calls the
++  original SELinux handler for everything it does not deny, so SELinux
++  enforcement is unchanged. Denied paths return `-ENOENT`, never `-EACCES`:
++  an `EACCES` would tell a detector that the file exists.
++- `iterate_dir` is a kretprobe. On entry the directory context's `actor` is
++  swapped for our wrapper; the wrapper drops hidden names and forwards the
++  rest to the original actor. Nothing in the filesystem is modified.
++
++**L1 (PackageManager).** Two probes, no binder-internal structures:
++
++- `binder_transaction` runs in the *caller's* context, so `current_uid()` is
++  the target uid. When the parcel carries the `IPackageManager` interface
++  token the thread is marked and package names in the request are renamed in
++  place (same length, so the parcel cannot desynchronise).
++- `binder_thread_read` also runs in the caller's context. If the thread is
++  marked and the buffer holds `BR_REPLY`, the reply parcel is rewritten on a
++  private copy: `List<PackageInfo>`/`String[]` elements are removed and the
++  count fixed, anything else is renamed in place.
++
++Every parcel decision is all-or-nothing: the container is walked and its
++element count validated before a single byte is changed; if anything does not
++add up the reply is sent unchanged.
++
++## Failure policy
++
++| Failure | Result |
++|---|---|
++| `selinux_*` symbol not found | that hook is skipped, the others still install |
++| `iterate_dir` not in kallsyms | readdir filtering off |
++| binder probes fail to register | L1 off; L0 still works |
++| path cannot be resolved | the operation is allowed (fail-open) |
++| parcel does not validate | reply is sent unmodified |
++| config rejected | previous rules stay in force |
++
++The module never denies anything for uid 0 or 1000, and never denies writes.
++
++## Configuration
++
++`KSU_IOCTL_XECHIDE_GET` / `SET` / `STATS`, `perm_check = only_root`, command
++numbers `0xE0..0xE2`. The structure is in `xechide.h`; `XECHIDE_RF_*` selects
++the layers per rule, `XECHIDE_CF_*` tunes the global behaviour.
++
++Nothing is persisted by the kernel. The helper pushes the encrypted
++configuration at boot (`ctl/README.md`), and an empty configuration means
++"hide nothing".
++
++## Debugging
++
++```
++dmesg | grep xechide      # hook install results, config updates
++cat /proc/kallsyms | grep -E 'selinux_(inode_permission|file_open)'
++```
++
++Counters are available through `KSU_IOCTL_XECHIDE_STATS` (`ctl/README.md`).
+diff --git a/new/kernel/xechide/xechide.h b/kernel/xechide/xechide.h
+new file mode 100644
+index 0000000..2a22157
+--- /dev/null
++++ b/kernel/xechide/xechide.h
+@@ -0,0 +1,128 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - kernel-level app & path hiding.
++ *
++ * This header is the ABI between the kernel part, the root helper (ctl/) and
++ * the Android app (manager/). It is deliberately self-contained: no kernel
++ * headers, so userspace can include it verbatim. All integers are 32/8 bit and
++ * every structure is packed, so the layout is identical on arm64 and x86_64.
++ */
++#ifndef _XECHIDE_H
++#define _XECHIDE_H
++
++#define XECHIDE_ABI_MAGIC 0x58454348u /* "XECH" */
++#define XECHIDE_ABI_VERSION 1u
++
++#define XECHIDE_MAX_RULES 64
++#define XECHIDE_PKG_LEN 128
++
++/* target_uid: this rule applies to every uid except 0 and 1000. */
++#define XECHIDE_UID_ALL 0xffffffffu
++
++/* per-rule flags */
++#define XECHIDE_RF_PATHS 0x0001u  /* hide the app's files (L0) */
++#define XECHIDE_RF_PROC 0x0002u   /* hide the app's processes (L0) */
++#define XECHIDE_RF_BINDER 0x0004u /* filter PackageManager replies (L1) */
++#define XECHIDE_RF_ALL (XECHIDE_RF_PATHS | XECHIDE_RF_PROC | XECHIDE_RF_BINDER)
++
++/* global flags */
++#define XECHIDE_CF_HIDE_SHELL 0x0001u /* also hide from adb shell (uid 2000) */
++#define XECHIDE_CF_HIDE_SELF 0x0002u  /* hide /data/adb/xechide from non-root */
++
++struct xechide_rule {
++	unsigned int target_uid; /* who must not see the app, or XECHIDE_UID_ALL */
++	unsigned int hidden_uid; /* the app's uid, used for /proc hiding */
++	unsigned int flags;      /* XECHIDE_RF_* */
++	unsigned char pkg[XECHIDE_PKG_LEN];
++} __attribute__((packed));
++
++struct xechide_config {
++	unsigned int magic;
++	unsigned int version;
++	unsigned int n_rules;
++	unsigned int flags;
++	struct xechide_rule rules[XECHIDE_MAX_RULES];
++} __attribute__((packed));
++
++/* Parcel filter outcome (xechide_parcel.c). */
++#define XE_PARCEL_NONE 0u
++#define XE_PARCEL_REBUILT 1u   /* elements removed, count updated */
++#define XE_PARCEL_REWRITTEN 2u /* layout untouched, names renamed */
++
++/* Directory classes for readdir filtering. */
++#define XE_DIR_APP 0u   /* /data/app */
++#define XE_DIR_DATA 1u  /* /data/data, /data/user/<n> */
++#define XE_DIR_PROC 2u  /* /proc */
++#define XE_DIR_MEDIA 3u /* Android/data on external storage */
++#define XE_DIR_NONE 0xffu
++
++/*
++ * Pure helpers, shared by the kernel module and the host test suite
++ * (tests/host). Return int, not bool, so userspace does not need stdbool
++ * before including this header.
++ */
++int xe_match_path(const struct xechide_rule *rule, const char *path);
++int xe_match_dirent(const struct xechide_rule *rule, unsigned int dir, const char *name, int namelen);
++unsigned int xe_parcel_filter(unsigned char *buf, unsigned int len, const char *const *names, int n_names,
++			      unsigned int *mode);
++
++/* Counters, read with KSU_IOCTL_XECHIDE_GET's stats magic. */
++struct xechide_stats {
++	unsigned int path_hits;
++	unsigned int dirent_hits;
++	unsigned int proc_hits;
++	unsigned int parcel_rebuilt;   /* replies rewritten with entries removed */
++	unsigned int parcel_rewritten; /* replies rewritten in place (name swap) */
++	unsigned int parcel_skipped;   /* replies we refused to touch */
++	unsigned int binder_errors;    /* marks that never got a reply */
++	unsigned int lsm_hooks;        /* hooks that actually installed */
++	unsigned int binder_hooks;     /* binder probes that actually installed */
++};
++
++#ifdef __KERNEL__
++
++#include <linux/types.h>
++#include <linux/uidgid.h>
++
++/* names collected for one parcel filter */
++#define XECHIDE_MAX_NAMES 16
++
++enum xechide_stat {
++	XE_STAT_PATH = 0,
++	XE_STAT_DIRENT,
++	XE_STAT_PROC,
++	XE_STAT_REBUILT,
++	XE_STAT_REWRITTEN,
++	XE_STAT_SKIPPED,
++	XE_STAT_BINDER,
++	XE_STAT_LSM,
++	XE_STAT_BINDER_HOOKS,
++	XE_STAT_MAX,
++};
++
++/* xechide_core.c */
++bool xechide_uid_has_rules(u32 uid, u32 what);
++bool xechide_hide_path(u32 uid, const char *path);
++bool xechide_hide_dirent(u32 uid, u32 dir, const char *name, int namelen);
++unsigned int xechide_filter_parcel(u32 uid, unsigned char *buf, unsigned int len, unsigned int *mode);
++void xechide_stat_inc(int which);
++void xechide_get_stats(struct xechide_stats *out);
++int xechide_init(void);
++void xechide_remove(void);
++
++/* xechide_binder.c */
++int xechide_binder_init(void);
++void xechide_binder_exit(void);
++
++/* xechide_lsm.c */
++int xechide_lsm_init(void);
++void xechide_lsm_exit(void);
++
++/* supercall handlers */
++int xechide_ioctl_get(void __user *arg);
++int xechide_ioctl_set(void __user *arg);
++
++extern bool xechide_enabled;
++
++#endif /* __KERNEL__ */
++#endif /* _XECHIDE_H */
+diff --git a/new/kernel/xechide/xechide_binder.c b/kernel/xechide/xechide_binder.c
+new file mode 100644
+index 0000000..4eb9208
+--- /dev/null
++++ b/kernel/xechide/xechide_binder.c
+@@ -0,0 +1,395 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - L1 enforcement (binder).
++ *
++ * Two probes, no binder-internal struct layout, no KMI-specific code:
++ *
++ *   binder_transaction (request) - current is the caller, so current_uid() is
++ *                                  the target uid. If the parcel carries the
++ *                                  PackageManager interface token, the thread
++ *                                  is marked and hidden package names inside
++ *                                  the request are renamed in place.
++ *
++ *   binder_thread_read (reply)   - current is the caller again. If the thread
++ *                                  is marked and the buffer contains BR_REPLY,
++ *                                  the reply parcel is rewritten (entries
++ *                                  removed, count fixed) or the names are
++ *                                  renamed. Only the parcel length field is
++ *                                  updated.
++ *
++ * Everything runs on a private copy and only UAPI structures are touched, so a
++ * mismatch can never corrupt a parcel: the filter either validates the whole
++ * container or leaves it byte-identical.
++ */
++#include <linux/errno.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/kprobes.h>
++#include <linux/pid.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++#include <linux/version.h>
++#include <linux/vmalloc.h>
++#include <uapi/linux/android/binder.h>
++
++#include "arch.h"
++#include "klog.h"
++#include "xechide.h"
++
++#define XE_PARCEL_MAX (256u * 1024u)
++#define XE_TOKEN_SCAN 1024u
++#define XE_MARKS 64
++#define XE_MARK_TTL (10 * HZ)
++
++static unsigned char *xe_parcel_buf;
++static DEFINE_SPINLOCK(xe_buf_lock);
++
++struct xe_mark {
++	u32 pid;
++	u32 uid;
++	unsigned long expires;
++};
++
++static struct xe_mark xe_marks[XE_MARKS];
++static DEFINE_SPINLOCK(xe_mark_lock);
++
++/* --------------------------------------------------------------- marks --- */
++
++static void mark_add(u32 pid, u32 uid)
++{
++	unsigned long flags, now = jiffies;
++	int i, free_slot = -1;
++
++	spin_lock_irqsave(&xe_mark_lock, flags);
++	for (i = 0; i < XE_MARKS; i++) {
++		if (xe_marks[i].pid == pid && time_before(now, xe_marks[i].expires)) {
++			xe_marks[i].uid = uid;
++			xe_marks[i].expires = now + XE_MARK_TTL;
++			spin_unlock_irqrestore(&xe_mark_lock, flags);
++			return;
++		}
++		if (free_slot < 0 && (xe_marks[i].pid == 0 || time_after(now, xe_marks[i].expires)))
++			free_slot = i;
++	}
++	if (free_slot >= 0) {
++		xe_marks[free_slot].pid = pid;
++		xe_marks[free_slot].uid = uid;
++		xe_marks[free_slot].expires = now + XE_MARK_TTL;
++	}
++	spin_unlock_irqrestore(&xe_mark_lock, flags);
++}
++
++static bool mark_peek(u32 pid, u32 *uid)
++{
++	unsigned long flags;
++	bool found = false;
++	int i;
++
++	spin_lock_irqsave(&xe_mark_lock, flags);
++	for (i = 0; i < XE_MARKS; i++) {
++		if (xe_marks[i].pid == pid && time_before(jiffies, xe_marks[i].expires)) {
++			*uid = xe_marks[i].uid;
++			found = true;
++			break;
++		}
++	}
++	spin_unlock_irqrestore(&xe_mark_lock, flags);
++	return found;
++}
++
++static void mark_remove(u32 pid)
++{
++	unsigned long flags;
++	int i;
++
++	spin_lock_irqsave(&xe_mark_lock, flags);
++	for (i = 0; i < XE_MARKS; i++) {
++		if (xe_marks[i].pid == pid) {
++			memset(&xe_marks[i], 0, sizeof(xe_marks[i]));
++			break;
++		}
++	}
++	spin_unlock_irqrestore(&xe_mark_lock, flags);
++}
++
++/* ------------------------------------------------------------- helpers --- */
++
++static inline u32 rd32(const unsigned char *p)
++{
++	u32 v;
++
++	memcpy(&v, p, 4);
++	return v;
++}
++
++static bool zeros_after(const unsigned char *p, unsigned int n)
++{
++	unsigned int i;
++
++	for (i = 0; i < n; i++)
++		if (p[i])
++			return false;
++	return true;
++}
++
++/* Does @buf contain @token as a parcel string (String16 or String8)? */
++static bool parcel_has_token(const unsigned char *buf, unsigned int len, const char *token)
++{
++	unsigned int n = (unsigned int)strlen(token), off, total, i;
++
++	if (len < 8 || !n)
++		return false;
++	if (len > XE_TOKEN_SCAN)
++		len = XE_TOKEN_SCAN;
++
++	for (off = 0; off + 4 <= len; off++) {
++		if (rd32(buf + off) != n)
++			continue;
++		total = (4u + 2u * n + 2u + 3u) & ~3u;
++		if (off + total <= len) {
++			bool ok = true;
++
++			for (i = 0; i < n; i++) {
++				if (buf[off + 4 + 2 * i] != (unsigned char)token[i] || buf[off + 5 + 2 * i] != 0) {
++					ok = false;
++					break;
++				}
++			}
++			if (ok && zeros_after(buf + off + 4 + 2 * n, total - 4 - 2 * n))
++				return true;
++		}
++		total = (4u + n + 1u + 3u) & ~3u;
++		if (off + total <= len && memcmp(buf + off + 4, token, n) == 0 &&
++		    zeros_after(buf + off + 4 + n, total - 4 - n))
++			return true;
++	}
++	return false;
++}
++
++/* --------------------------------------------------------- request probe --- */
++
++static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
++{
++	struct binder_transaction_data *tr = (struct binder_transaction_data *)PT_REGS_PARM3(regs);
++	unsigned long flags;
++	unsigned int mode = 0, new_len, size;
++	u32 uid = current_uid().val;
++	int reply = (int)PT_REGS_CCALL_PARM4(regs);
++
++	if (reply)
++		return 0; /* replies are handled on the read side */
++	if (!tr || !tr->data_size || !tr->data.ptr.buffer)
++		return 0;
++	if (!xechide_uid_has_rules(uid, XECHIDE_RF_BINDER))
++		return 0;
++
++	size = (unsigned int)tr->data_size;
++	if (size < 8 || size > XE_TOKEN_SCAN * 8)
++		return 0;
++
++	if (!spin_trylock_irqsave(&xe_buf_lock, flags))
++		return 0;
++	if (copy_from_user_nofault(xe_parcel_buf, (void __user *)tr->data.ptr.buffer, size)) {
++		spin_unlock_irqrestore(&xe_buf_lock, flags);
++		return 0;
++	}
++	if (!parcel_has_token(xe_parcel_buf, size, "android.content.pm.IPackageManager")) {
++		spin_unlock_irqrestore(&xe_buf_lock, flags);
++		return 0;
++	}
++
++	new_len = xechide_filter_parcel(uid, xe_parcel_buf, size, &mode);
++	if (mode == XE_PARCEL_REWRITTEN && new_len == size) {
++		/* Layout untouched: write the renamed request back. */
++		if (copy_to_user_nofault((void __user *)tr->data.ptr.buffer, xe_parcel_buf, size))
++			pr_debug("xechide: request writeback failed\n");
++	}
++	spin_unlock_irqrestore(&xe_buf_lock, flags);
++
++	mark_add(task_pid_nr(current), uid);
++	return 0;
++}
++
++static struct kprobe xe_txn_kp = {
++	.symbol_name = "binder_transaction",
++	.pre_handler = xe_txn_pre,
++};
++
++/* ----------------------------------------------------------- reply probe --- */
++
++struct xe_read_state {
++	unsigned long buffer;
++	unsigned long consumed;
++};
++
++static int xe_read_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
++{
++	struct xe_read_state *st = (struct xe_read_state *)ri->data;
++
++	st->buffer = PT_REGS_PARM3(regs);
++	st->consumed = PT_REGS_PARM5(regs);
++	return 0;
++}
++
++/*
++ * Walk the read buffer. Only the commands binder can queue in front of a reply
++ * are understood; anything else stops the walk (fail-open).
++ * Returns true when a reply parcel was rewritten.
++ */
++static bool filter_reply(u32 uid, void __user *buffer, unsigned int used)
++{
++	unsigned int off = 0;
++	bool filtered = false;
++	unsigned long flags;
++
++	while (off + 4 <= used) {
++		u32 cmd;
++
++		if (copy_from_user_nofault(&cmd, (char __user *)buffer + off, 4))
++			break;
++
++		if (cmd == BR_REPLY) {
++			struct binder_transaction_data trd;
++			unsigned int total = 4u + sizeof(trd);
++			unsigned int new_len, mode = 0;
++
++			if (off + total > used)
++				break;
++			if (copy_from_user_nofault(&trd, (char __user *)buffer + off + 4, sizeof(trd)))
++				break;
++			if (!trd.data_size || trd.data_size > XE_PARCEL_MAX || trd.offsets_size ||
++			    !trd.data.ptr.buffer)
++				break;
++
++			if (!spin_trylock_irqsave(&xe_buf_lock, flags))
++				break;
++			if (copy_from_user_nofault(xe_parcel_buf, (void __user *)trd.data.ptr.buffer, trd.data_size)) {
++				spin_unlock_irqrestore(&xe_buf_lock, flags);
++				break;
++			}
++			new_len = xechide_filter_parcel(uid, xe_parcel_buf, trd.data_size, &mode);
++			if (new_len && new_len <= trd.data_size &&
++			    !copy_to_user_nofault((void __user *)trd.data.ptr.buffer, xe_parcel_buf, new_len)) {
++				if (new_len != trd.data_size) {
++					unsigned int at = off + 4 + (unsigned int)offsetof(struct binder_transaction_data,
++											   data_size);
++					u32 new_size = new_len;
++
++					if (!copy_to_user_nofault((char __user *)buffer + at, &new_size, 4))
++						filtered = true;
++				} else {
++					filtered = true;
++				}
++			}
++			spin_unlock_irqrestore(&xe_buf_lock, flags);
++			return filtered;
++		}
++
++		switch (cmd) {
++		case BR_NOOP:
++		case BR_TRANSACTION_COMPLETE:
++		case BR_SPAWN_LOOPER:
++		case BR_FAILED_REPLY:
++		case BR_DEAD_REPLY:
++		case BR_OK:
++		case BR_ONEWAY_SPAM_SUSPECT:
++			off += 4;
++			break;
++		case BR_ERROR:
++			off += 8;
++			break;
++		case BR_INCREFS:
++		case BR_ACQUIRE:
++		case BR_RELEASE:
++		case BR_DECREFS:
++			off += 4 + 16;
++			break;
++		case BR_DEAD_BINDER:
++		case BR_CLEAR_DEATH_NOTIFICATION_DONE:
++			off += 4 + 8;
++			break;
++		default:
++			return false;
++		}
++	}
++	return false;
++}
++
++static int xe_read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
++{
++	struct xe_read_state *st = (struct xe_read_state *)ri->data;
++	unsigned int used = 0;
++	u32 uid = 0, pid;
++
++	if (regs_return_value(regs))
++		return 0;
++	if (!st->buffer || !st->consumed)
++		return 0;
++
++	pid = task_pid_nr(current);
++	if (!mark_peek(pid, &uid))
++		return 0;
++	if (!xechide_uid_has_rules(uid, XECHIDE_RF_BINDER)) {
++		mark_remove(pid);
++		return 0;
++	}
++	if (copy_from_user_nofault(&used, (void __user *)st->consumed, 4))
++		return 0;
++	if (!used || used > XE_PARCEL_MAX)
++		return 0;
++
++	if (filter_reply(uid, (void __user *)st->buffer, used))
++		mark_remove(pid);
++	return 0;
++}
++
++static struct kretprobe xe_read_rp = {
++	.kp.symbol_name = "binder_thread_read",
++	.entry_handler = xe_read_entry,
++	.handler = xe_read_ret,
++	.data_size = sizeof(struct xe_read_state),
++	.maxactive = 64,
++};
++
++/* ------------------------------------------------------------------ init --- */
++
++int xechide_binder_init(void)
++{
++	int installed = 0, ret;
++
++	xe_parcel_buf = vmalloc(XE_PARCEL_MAX);
++	if (!xe_parcel_buf) {
++		pr_warn("xechide: binder scratch allocation failed\n");
++		return -ENOMEM;
++	}
++
++	ret = register_kprobe(&xe_txn_kp);
++	if (ret) {
++		pr_warn("xechide: binder_transaction probe failed: %d\n", ret);
++	} else {
++		installed++;
++	}
++
++	ret = register_kretprobe(&xe_read_rp);
++	if (ret) {
++		pr_warn("xechide: binder_thread_read probe failed: %d\n", ret);
++	} else {
++		installed++;
++	}
++
++	if (installed)
++		xechide_stat_inc(XE_STAT_BINDER_HOOKS);
++	pr_info("xechide: %d/2 binder probes installed\n", installed);
++	return installed ? 0 : -ENOSYS;
++}
++
++void xechide_binder_exit(void)
++{
++	unregister_kretprobe(&xe_read_rp);
++	unregister_kprobe(&xe_txn_kp);
++	vfree(xe_parcel_buf);
++	xe_parcel_buf = NULL;
++}
+diff --git a/new/kernel/xechide/xechide_core.c b/kernel/xechide/xechide_core.c
+new file mode 100644
+index 0000000..d79f1df
+--- /dev/null
++++ b/kernel/xechide/xechide_core.c
+@@ -0,0 +1,432 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - kernel rule engine.
++ *
++ * The live configuration is a single kmalloc'd block published with RCU: every
++ * hook does one rcu_dereference() and then a handful of string compares, so a
++ * configuration update never blocks a file operation. Rules are validated
++ * before the swap; a rejected update leaves the previous rules in force.
++ */
++#include <linux/atomic.h>
++#include <linux/cred.h>
++#include <linux/errno.h>
++#include <linux/init.h>
++#include <linux/jiffies.h>
++#include <linux/kernel.h>
++#include <linux/lockdep.h>
++#include <linux/pid.h>
++#include <linux/rcupdate.h>
++#include <linux/sched.h>
++#include <linux/sched/task.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/types.h>
++#include <linux/uaccess.h>
++#include <linux/uidgid.h>
++#include <linux/user_namespace.h>
++
++#include "xechide.h"
++
++bool xechide_enabled;
++static struct xechide_config __rcu *xechide_cfg;
++static DEFINE_SPINLOCK(xechide_cfg_lock);
++
++static atomic_t xechide_stats[XE_STAT_MAX];
++
++void xechide_stat_inc(int which)
++{
++	if (which >= 0 && which < XE_STAT_MAX)
++		atomic_inc(&xechide_stats[which]);
++}
++
++static bool uid_protected(u32 uid)
++{
++	/* Never hide anything from root or system_server. */
++	return uid == 0 || uid == 1000;
++}
++
++static bool rule_matches_uid(const struct xechide_config *cfg, const struct xechide_rule *rule, u32 uid)
++{
++	if (uid_protected(uid))
++		return false;
++	if (rule->target_uid == XECHIDE_UID_ALL) {
++		/* uid 2000 is opt-in: hiding from the shell breaks tooling. */
++		if (uid == 2000)
++			return (cfg->flags & XECHIDE_CF_HIDE_SHELL) != 0;
++		return true;
++	}
++	return rule->target_uid == uid;
++}
++
++bool xechide_uid_has_rules(u32 uid, u32 what)
++{
++	const struct xechide_config *cfg;
++	bool hit = false;
++	u32 i;
++
++	if (!xechide_enabled || uid_protected(uid))
++		return false;
++
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	if (!cfg)
++		goto out;
++	if (cfg->n_rules == 0)
++		goto out;
++	for (i = 0; i < cfg->n_rules; i++) {
++		const struct xechide_rule *rule = &cfg->rules[i];
++
++		if (!(rule->flags & what))
++			continue;
++		if (!rule_matches_uid(cfg, rule, uid))
++			continue;
++		hit = true;
++		break;
++	}
++out:
++	rcu_read_unlock();
++	return hit;
++}
++
++/* ------------------------------------------------------------- self-hide --- */
++
++static bool is_self_path(const char *path)
++{
++	static const char prefix[] = "/data/adb/xechide";
++	size_t n = sizeof(prefix) - 1;
++
++	return strncmp(path, prefix, n) == 0 && (path[n] == '\0' || path[n] == '/');
++}
++
++/* ------------------------------------------------------------ /proc --- */
++
++static bool parse_proc_pid(const char *path, u32 *pid_out)
++{
++	const char *p;
++	u32 v = 0;
++
++	if (strncmp(path, "/proc/", 6) != 0)
++		return false;
++	p = path + 6;
++	if (*p < '0' || *p > '9')
++		return false;
++	while (*p >= '0' && *p <= '9') {
++		if (v > 0xfffff)
++			return false;
++		v = v * 10 + (u32)(*p - '0');
++		p++;
++	}
++	if (*p != '\0' && *p != '/')
++		return false;
++	if (!v)
++		return false;
++	*pid_out = v;
++	return true;
++}
++
++/* uid of @nr as seen from the init namespace, 0 when it does not exist */
++static u32 pid_uid(u32 nr)
++{
++	struct task_struct *task;
++	struct pid *pid;
++	u32 uid = 0;
++
++	rcu_read_lock();
++	pid = find_vpid(nr);
++	if (pid) {
++		task = pid_task(pid, PIDTYPE_PID);
++		if (task)
++			uid = from_kuid_munged(&init_user_ns, task_uid(task));
++	}
++	rcu_read_unlock();
++	return uid;
++}
++
++/* ------------------------------------------------------------------ L0 --- */
++
++bool xechide_hide_path(u32 uid, const char *path)
++{
++	const struct xechide_config *cfg;
++	bool hidden = false;
++	u32 i;
++
++	if (!xechide_enabled || uid_protected(uid) || !path || path[0] != '/')
++		return false;
++
++	if (is_self_path(path)) {
++		xechide_stat_inc(XE_STAT_PATH);
++		return true;
++	}
++
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	if (!cfg)
++		goto out;
++
++	for (i = 0; i < cfg->n_rules; i++) {
++		const struct xechide_rule *rule = &cfg->rules[i];
++		u32 pid;
++
++		if (!rule_matches_uid(cfg, rule, uid))
++			continue;
++		if ((rule->flags & XECHIDE_RF_PATHS) && xe_match_path(rule, path)) {
++			hidden = true;
++			break;
++		}
++		if ((rule->flags & XECHIDE_RF_PROC) && parse_proc_pid(path, &pid)) {
++			u32 owner = pid_uid(pid);
++
++			if (rule->hidden_uid && owner == rule->hidden_uid) {
++				xechide_stat_inc(XE_STAT_PROC);
++				hidden = true;
++				break;
++			}
++		}
++	}
++out:
++	rcu_read_unlock();
++	if (hidden)
++		xechide_stat_inc(XE_STAT_PATH);
++	return hidden;
++}
++
++bool xechide_hide_dirent(u32 uid, u32 dir, const char *name, int namelen)
++{
++	const struct xechide_config *cfg;
++	bool hidden = false;
++	u32 i;
++
++	if (!xechide_enabled || uid_protected(uid) || !name || namelen <= 0)
++		return false;
++
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	if (!cfg)
++		goto out;
++
++	for (i = 0; i < cfg->n_rules; i++) {
++		const struct xechide_rule *rule = &cfg->rules[i];
++
++		if (!rule_matches_uid(cfg, rule, uid))
++			continue;
++		if (dir == XE_DIR_PROC) {
++			u32 pid = 0, k;
++
++			if (!(rule->flags & XECHIDE_RF_PROC) || !rule->hidden_uid)
++				continue;
++			for (k = 0; k < (u32)namelen; k++) {
++				if (name[k] < '0' || name[k] > '9')
++					break;
++				pid = pid * 10 + (u32)(name[k] - '0');
++				if (pid > 0xfffff)
++					break;
++			}
++			if (k != (u32)namelen || !pid)
++				continue;
++			if (pid_uid(pid) == rule->hidden_uid) {
++				xechide_stat_inc(XE_STAT_PROC);
++				hidden = true;
++				break;
++			}
++			continue;
++		}
++		if ((rule->flags & XECHIDE_RF_PATHS) && xe_match_dirent(rule, dir, name, namelen)) {
++			xechide_stat_inc(XE_STAT_DIRENT);
++			hidden = true;
++			break;
++		}
++	}
++out:
++	rcu_read_unlock();
++	return hidden;
++}
++
++/*
++ * Filter one parcel for @uid. The caller owns a private kernel copy; the
++ * returned length is <= len and 0 means "leave the parcel alone".
++ */
++unsigned int xechide_filter_parcel(u32 uid, unsigned char *buf, unsigned int len, unsigned int *mode)
++{
++	const struct xechide_config *cfg;
++	const char *names[XECHIDE_MAX_NAMES];
++	unsigned int new_len = 0, n = 0;
++	u32 i;
++
++	*mode = XE_PARCEL_NONE;
++	if (!xechide_enabled || uid_protected(uid) || !buf)
++		return 0;
++
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	if (!cfg)
++		goto out;
++	for (i = 0; i < cfg->n_rules && n < XECHIDE_MAX_NAMES; i++) {
++		const struct xechide_rule *rule = &cfg->rules[i];
++		int j, dup = 0;
++
++		if (!(rule->flags & XECHIDE_RF_BINDER))
++			continue;
++		if (!rule_matches_uid(cfg, rule, uid))
++			continue;
++		for (j = 0; j < (int)n; j++) {
++			if (strcmp(names[j], (const char *)rule->pkg) == 0) {
++				dup = 1;
++				break;
++			}
++		}
++		if (!dup)
++			names[n++] = (const char *)rule->pkg;
++	}
++	if (!n)
++		goto out;
++	new_len = xe_parcel_filter(buf, len, names, (int)n, mode);
++out:
++	rcu_read_unlock();
++	return new_len;
++}
++
++/* --------------------------------------------------------------- config --- */
++
++static bool pkg_valid(const unsigned char *pkg)
++{
++	u32 i;
++
++	if (!pkg[0])
++		return false;
++	for (i = 0; i < XECHIDE_PKG_LEN; i++) {
++		unsigned char c = pkg[i];
++
++		if (!c)
++			return i > 0;
++		if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
++		      c == '_'))
++			return false;
++	}
++	return false; /* not NUL terminated */
++}
++
++static int cfg_validate(struct xechide_config *cfg)
++{
++	u32 i;
++
++	if (cfg->magic != XECHIDE_ABI_MAGIC || cfg->version != XECHIDE_ABI_VERSION)
++		return -EINVAL;
++	if (cfg->n_rules > XECHIDE_MAX_RULES)
++		return -EINVAL;
++	cfg->flags &= XECHIDE_CF_HIDE_SHELL | XECHIDE_CF_HIDE_SELF;
++
++	for (i = 0; i < cfg->n_rules; i++) {
++		struct xechide_rule *rule = &cfg->rules[i];
++
++		rule->pkg[XECHIDE_PKG_LEN - 1] = 0;
++		if (!pkg_valid(rule->pkg))
++			return -EINVAL;
++		if (rule->target_uid == 0 || rule->target_uid == 1000)
++			return -EINVAL;
++		if (rule->hidden_uid == 0 || rule->hidden_uid == 1000)
++			return -EINVAL;
++		rule->flags &= XECHIDE_RF_ALL;
++		if (!rule->flags)
++			return -EINVAL;
++	}
++	return 0;
++}
++
++int xechide_ioctl_set(void __user *arg)
++{
++	struct xechide_config *cfg, *old;
++
++	if (!arg)
++		return -EINVAL;
++	cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
++	if (!cfg)
++		return -ENOMEM;
++	if (copy_from_user(cfg, arg, sizeof(*cfg))) {
++		kfree(cfg);
++		return -EFAULT;
++	}
++	if (cfg_validate(cfg)) {
++		kfree(cfg);
++		return -EINVAL;
++	}
++
++	spin_lock(&xechide_cfg_lock);
++	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
++	rcu_assign_pointer(xechide_cfg, cfg);
++	spin_unlock(&xechide_cfg_lock);
++
++	if (old) {
++		synchronize_rcu();
++		kfree(old);
++	}
++	pr_info("xechide: config updated, %u rule(s), flags 0x%x\n", cfg->n_rules, cfg->flags);
++	return 0;
++}
++
++int xechide_ioctl_get(void __user *arg)
++{
++	struct xechide_config *out;
++	const struct xechide_config *cfg;
++	int ret = 0;
++
++	if (!arg)
++		return -EINVAL;
++	out = kzalloc(sizeof(*out), GFP_KERNEL);
++	if (!out)
++		return -ENOMEM;
++
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	if (cfg)
++		memcpy(out, cfg, sizeof(*out));
++	else {
++		out->magic = XECHIDE_ABI_MAGIC;
++		out->version = XECHIDE_ABI_VERSION;
++	}
++	rcu_read_unlock();
++
++	if (copy_to_user(arg, out, sizeof(*out)))
++		ret = -EFAULT;
++	kfree(out);
++	return ret;
++}
++
++void xechide_get_stats(struct xechide_stats *out)
++{
++	if (!out)
++		return;
++	memset(out, 0, sizeof(*out));
++	out->path_hits = (u32)atomic_read(&xechide_stats[XE_STAT_PATH]);
++	out->dirent_hits = (u32)atomic_read(&xechide_stats[XE_STAT_DIRENT]);
++	out->proc_hits = (u32)atomic_read(&xechide_stats[XE_STAT_PROC]);
++	out->parcel_rebuilt = (u32)atomic_read(&xechide_stats[XE_STAT_REBUILT]);
++	out->parcel_rewritten = (u32)atomic_read(&xechide_stats[XE_STAT_REWRITTEN]);
++	out->parcel_skipped = (u32)atomic_read(&xechide_stats[XE_STAT_SKIPPED]);
++	out->binder_errors = (u32)atomic_read(&xechide_stats[XE_STAT_BINDER]);
++	out->lsm_hooks = (u32)atomic_read(&xechide_stats[XE_STAT_LSM]);
++	out->binder_hooks = (u32)atomic_read(&xechide_stats[XE_STAT_BINDER_HOOKS]);
++}
++
++int __init xechide_init(void)
++{
++	xechide_enabled = true;
++	pr_info("xechide: rule engine ready (%u max rules)\n", XECHIDE_MAX_RULES);
++	return 0;
++}
++
++void __exit xechide_remove(void)
++{
++	struct xechide_config *old;
++
++	xechide_enabled = false;
++	spin_lock(&xechide_cfg_lock);
++	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
++	rcu_assign_pointer(xechide_cfg, NULL);
++	spin_unlock(&xechide_cfg_lock);
++	if (old) {
++		synchronize_rcu();
++		kfree(old);
++	}
++	pr_info("xechide: rule engine stopped\n");
++}
+diff --git a/new/kernel/xechide/xechide_lsm.c b/kernel/xechide/xechide_lsm.c
+new file mode 100644
+index 0000000..efe20b6
+--- /dev/null
++++ b/kernel/xechide/xechide_lsm.c
+@@ -0,0 +1,422 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - L0 enforcement.
++ *
++ * Hooks are installed by replacing the SELinux slot of four LSM entries
++ * through KernelSU's ksu_lsm_hook() (the same mechanism KernelSU itself uses
++ * for selinux_setprocattr). Our replacement runs first and calls the original
++ * SELinux handler for everything it does not deny, so SELinux enforcement is
++ * never weakened.
++ *
++ * Readdir filtering cannot be done with an LSM hook (there is no
++ * inode_readdir hook), so `iterate_dir` is instrumented with a kretprobe and
++ * the filling actor of the directory context is swapped for the duration of
++ * one readdir. The wrapper either drops a name or forwards it to the original
++ * actor - the filesystem itself is untouched.
++ *
++ * Every failure path here is fail-open: a hook that cannot be installed, a path
++ * that cannot be resolved, or a context that cannot be tracked leaves the
++ * kernel's normal behaviour in place.
++ */
++#include <linux/cred.h>
++#include <linux/dcache.h>
++#include <linux/errno.h>
++#include <linux/fs.h>
++#include <linux/kernel.h>
++#include <linux/kprobes.h>
++#include <linux/lsm_hooks.h>
++#include <linux/namei.h>
++#include <linux/path.h>
++#include <linux/sched.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/uidgid.h>
++#include <linux/version.h>
++
++#include "arch.h"
++#include "hook/lsm_hook.h"
++#include "klog.h"
++#include "xechide.h"
++
++#ifndef MAY_ACCESS
++#define MAY_ACCESS 0x10
++#endif
++
++#define XE_PATH_MAX 512
++
++/* --------------------------------------------------------------- helpers --- */
++
++/* Path of @dentry relative to the root, or NULL. No allocation, no sleep. */
++static const char *xe_dentry_path(struct dentry *d, char *buf, int len)
++{
++	char *p;
++
++	if (!d || !buf || len <= 0)
++		return NULL;
++	p = dentry_path_raw(d, buf, len);
++	if (IS_ERR_OR_NULL(p) || p[0] != '/')
++		return NULL;
++	return p;
++}
++
++static bool is_digits(const char *p, const char **end)
++{
++	const char *s = p;
++
++	while (*p >= '0' && *p <= '9')
++		p++;
++	if (p == s)
++		return false;
++	if (end)
++		*end = p;
++	return true;
++}
++
++/* "/data/data", "/data/user/<n>", "/data/user_de/<n>" */
++static bool is_data_dir(const char *path)
++{
++	static const char ud[] = "/data/user/";
++	static const char udd[] = "/data/user_de/";
++	const char *end;
++
++	if (!strcmp(path, "/data/data"))
++		return true;
++	if (!strncmp(path, ud, sizeof(ud) - 1)) {
++		if (!is_digits(path + sizeof(ud) - 1, &end) || *end)
++			return false;
++		return true;
++	}
++	if (!strncmp(path, udd, sizeof(udd) - 1)) {
++		if (!is_digits(path + sizeof(udd) - 1, &end) || *end)
++			return false;
++		return true;
++	}
++	return false;
++}
++
++static bool is_media_dir(const char *path)
++{
++	size_t n = strlen(path);
++	static const char suffix[] = "/Android/data";
++	size_t m = sizeof(suffix) - 1;
++
++	return n >= m && strcmp(path + n - m, suffix) == 0;
++}
++
++static unsigned int dir_kind(struct file *file, char *buf, int len)
++{
++	const char *path;
++
++	if (!file || !file->f_path.dentry)
++		return XE_DIR_NONE;
++	path = xe_dentry_path(file->f_path.dentry, buf, len);
++	if (!path)
++		return XE_DIR_NONE;
++	if (!strcmp(path, "/data/app"))
++		return XE_DIR_APP;
++	if (is_data_dir(path))
++		return XE_DIR_DATA;
++	if (!strcmp(path, "/proc"))
++		return XE_DIR_PROC;
++	if (is_media_dir(path))
++		return XE_DIR_MEDIA;
++	return XE_DIR_NONE;
++}
++
++/* ------------------------------------------------------------- L0 hooks --- */
++
++/* Filled in by xechide_lsm_init(); the originals are called for everything we
++ * do not deny, so SELinux keeps enforcing. */
++static struct ksu_lsm_hook xe_inode_permission_hook, xe_inode_getattr_hook, xe_file_permission_hook,
++	xe_file_open_hook;
++
++/* lsm_hook_defs.h keeps this signature from 5.10 through 6.18. */
++typedef int (*inode_permission_fn)(struct inode *inode, int mask);
++
++static int xe_inode_permission(struct inode *inode, int mask)
++{	u32 uid = current_uid().val;
++	char buf[XE_PATH_MAX];
++	struct dentry *d;
++	int ret;
++
++	if (!xechide_enabled || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
++		goto orig;
++	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
++		goto orig;
++
++	d = d_find_alias(inode);
++	if (!d)
++		goto orig;
++	{
++		const char *path = xe_dentry_path(d, buf, sizeof(buf));
++		bool hidden = path && xechide_hide_path(uid, path);
++
++		dput(d);
++		if (hidden) {
++			return -ENOENT;
++		}
++	}
++orig:
++	if (!xe_inode_permission_hook.original)
++		return 0;
++	ret = ((inode_permission_fn)xe_inode_permission_hook.original)(inode, mask);
++	return ret;
++}
++
++typedef int (*inode_getattr_fn)(const struct path *path);
++
++static int xe_inode_getattr(const struct path *path)
++{
++	u32 uid = current_uid().val;
++	char buf[XE_PATH_MAX];
++
++	if (xechide_enabled && path && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
++		const char *p = xe_dentry_path(path->dentry, buf, sizeof(buf));
++
++		if (p && xechide_hide_path(uid, p)) {
++			return -ENOENT;
++		}
++	}
++	if (!xe_inode_getattr_hook.original)
++		return 0;
++	return ((inode_getattr_fn)xe_inode_getattr_hook.original)(path);
++}
++
++typedef int (*file_permission_fn)(struct file *file, int mask);
++
++static int xe_file_permission(struct file *file, int mask)
++{
++	u32 uid = current_uid().val;
++	char buf[XE_PATH_MAX];
++
++	if (xechide_enabled && file && (mask & (MAY_READ | MAY_EXEC)) &&
++	    xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC)) {
++		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
++
++		if (p && xechide_hide_path(uid, p)) {
++			return -ENOENT;
++		}
++	}
++	if (!xe_file_permission_hook.original)
++		return 0;
++	return ((file_permission_fn)xe_file_permission_hook.original)(file, mask);
++}
++
++typedef int (*file_open_fn)(struct file *file);
++
++static int xe_file_open(struct file *file)
++{
++	u32 uid = current_uid().val;
++	char buf[XE_PATH_MAX];
++
++	if (xechide_enabled && file && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
++		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
++
++		if (p && xechide_hide_path(uid, p)) {
++			return -ENOENT;
++		}
++	}
++	if (!xe_file_open_hook.original)
++		return 0;
++	return ((file_open_fn)xe_file_open_hook.original)(file);
++}
++
++/* -------------------------------------------------------- readdir filter --- */
++
++struct xe_dir_slot {
++	struct dir_context *ctx;
++	void *actor;
++	u32 uid;
++	u32 kind;
++};
++
++struct xe_dir_state {
++	struct dir_context *ctx;
++	u8 swapped;
++};
++
++#define XE_DIR_SLOTS 32
++static struct xe_dir_slot xe_dir_slots[XE_DIR_SLOTS];
++static DEFINE_SPINLOCK(xe_dir_lock);
++
++static struct xe_dir_slot *xe_slot_of(struct dir_context *ctx)
++{
++	int i;
++
++	for (i = 0; i < XE_DIR_SLOTS; i++)
++		if (xe_dir_slots[i].ctx == ctx)
++			return &xe_dir_slots[i];
++	return NULL;
++}
++
++static int xe_dir_actor(struct dir_context *ctx, const char *name, int namelen, loff_t offset, u64 ino,
++			unsigned int d_type)
++{
++	struct xe_dir_slot slot;
++	unsigned long flags;
++	struct xe_dir_slot *found;
++	filldir_t orig;
++
++	spin_lock_irqsave(&xe_dir_lock, flags);
++	found = xe_slot_of(ctx);
++	if (found)
++		slot = *found;
++	spin_unlock_irqrestore(&xe_dir_lock, flags);
++	if (!found)
++		return 0; /* untracked context: drop the entry rather than call NULL */
++
++	if (xechide_hide_dirent(slot.uid, slot.kind, name, namelen))
++		return 0; /* skipped: the filesystem treats 0 as "next entry" */
++
++	orig = (filldir_t)slot.actor;
++	if (!orig)
++		return 0;
++	return orig(ctx, name, namelen, offset, ino, d_type);
++}
++
++static int xe_iter_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
++{
++	struct xe_dir_state *st = (struct xe_dir_state *)ri->data;
++	struct dir_context *ctx = (struct dir_context *)PT_REGS_PARM2(regs);
++	struct file *file = (struct file *)PT_REGS_PARM1(regs);
++	unsigned long flags;
++	struct xe_dir_slot *slot;
++	char buf[XE_PATH_MAX];
++	unsigned int kind;
++	u32 uid = current_uid().val;
++
++	st->ctx = NULL;
++	st->swapped = 0;
++	if (!xechide_enabled || !ctx || !ctx->actor || !file)
++		return 1;
++	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
++		return 1;
++
++	kind = dir_kind(file, buf, sizeof(buf));
++	if (kind == XE_DIR_NONE)
++		return 1;
++
++	spin_lock_irqsave(&xe_dir_lock, flags);
++	slot = NULL;
++	{
++		int i;
++
++		for (i = 0; i < XE_DIR_SLOTS; i++) {
++			if (xe_dir_slots[i].ctx == NULL) {
++				slot = &xe_dir_slots[i];
++				break;
++			}
++		}
++	}
++	if (!slot) {
++		spin_unlock_irqrestore(&xe_dir_lock, flags);
++		return 1;
++	}
++	slot->ctx = ctx;
++	slot->actor = (void *)ctx->actor;
++	slot->uid = uid;
++	slot->kind = kind;
++	ctx->actor = xe_dir_actor;
++	spin_unlock_irqrestore(&xe_dir_lock, flags);
++
++	st->ctx = ctx;
++	st->swapped = 1;
++	return 0;
++}
++
++static int xe_iter_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
++{
++	struct xe_dir_state *st = (struct xe_dir_state *)ri->data;
++	unsigned long flags;
++
++	(void)regs;
++	if (!st->swapped || !st->ctx)
++		return 0;
++	spin_lock_irqsave(&xe_dir_lock, flags);
++	{
++		struct xe_dir_slot *slot = xe_slot_of(st->ctx);
++
++		if (slot)
++			memset(slot, 0, sizeof(*slot));
++	}
++	spin_unlock_irqrestore(&xe_dir_lock, flags);
++	return 0;
++}
++
++static struct kretprobe xe_iterate_rp = {
++	.kp.symbol_name = "iterate_dir",
++	.entry_handler = xe_iter_entry,
++	.handler = xe_iter_ret,
++	.data_size = sizeof(struct xe_dir_state),
++	.maxactive = 64,
++};
++
++/* --------------------------------------------------------- hook install --- */
++
++int xechide_lsm_init(void)
++{
++	int installed = 0, ret;
++
++	/* Compound literals: the hook structs are declared above the handlers so
++	 * that a handler can call hook.original without a global lookup. */
++	xe_inode_permission_hook =
++		(struct ksu_lsm_hook)KSU_LSM_HOOK_INIT(inode_permission, "selinux_inode_permission", xe_inode_permission, 0);
++	xe_inode_getattr_hook =
++		(struct ksu_lsm_hook)KSU_LSM_HOOK_INIT(inode_getattr, "selinux_inode_getattr", xe_inode_getattr, 0);
++	xe_file_permission_hook =
++		(struct ksu_lsm_hook)KSU_LSM_HOOK_INIT(file_permission, "selinux_file_permission", xe_file_permission, 0);
++	xe_file_open_hook =
++		(struct ksu_lsm_hook)KSU_LSM_HOOK_INIT(file_open, "selinux_file_open", xe_file_open, 0);
++
++	ret = ksu_lsm_hook(&xe_inode_permission_hook);
++	if (ret) {
++		pr_warn("xechide: inode_permission hook failed: %d\n", ret);
++	} else {
++		installed++;
++		xechide_stat_inc(XE_STAT_LSM);
++	}
++
++	ret = ksu_lsm_hook(&xe_inode_getattr_hook);
++	if (ret) {
++		pr_warn("xechide: inode_getattr hook failed: %d\n", ret);
++	} else {
++		installed++;
++		xechide_stat_inc(XE_STAT_LSM);
++	}
++
++	ret = ksu_lsm_hook(&xe_file_permission_hook);
++	if (ret) {
++		pr_warn("xechide: file_permission hook failed: %d\n", ret);
++	} else {
++		installed++;
++		xechide_stat_inc(XE_STAT_LSM);
++	}
++
++	ret = ksu_lsm_hook(&xe_file_open_hook);
++	if (ret) {
++		pr_warn("xechide: file_open hook failed: %d\n", ret);
++	} else {
++		installed++;
++		xechide_stat_inc(XE_STAT_LSM);
++	}
++
++	ret = register_kretprobe(&xe_iterate_rp);
++	if (ret) {
++		pr_warn("xechide: iterate_dir probe failed: %d\n", ret);
++	} else {
++		installed++;
++		xechide_stat_inc(XE_STAT_LSM);
++	}
++
++	pr_info("xechide: %d/%d L0 hooks installed\n", installed, 5);
++	return installed ? 0 : -ENOSYS;
++}
++
++void xechide_lsm_exit(void)
++{
++	unregister_kretprobe(&xe_iterate_rp);
++	ksu_lsm_unhook(&xe_file_open_hook);
++	ksu_lsm_unhook(&xe_file_permission_hook);
++	ksu_lsm_unhook(&xe_inode_getattr_hook);
++	ksu_lsm_unhook(&xe_inode_permission_hook);
++}
+diff --git a/new/kernel/xechide/xechide_match.c b/kernel/xechide/xechide_match.c
+new file mode 100644
+index 0000000..f119eec
+--- /dev/null
++++ b/kernel/xechide/xechide_match.c
+@@ -0,0 +1,169 @@
++﻿/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - pure path/name matching. No kernel API is used here so the same
++ * code is compiled into the module and into the host test suite
++ * (tests/host). Keep it allocation-free: every hook that calls into this file
++ * runs in atomic context.
++ */
++#include "xechide.h"
++
++#ifdef XECHIDE_HOST
++#include <stdbool.h>
++#include <stddef.h>
++#include <string.h>
++#else
++#include <linux/string.h>
++#include <linux/types.h>
++#endif
++
++/* Directory classes live in xechide.h (XE_DIR_*). */
++
++static inline bool pkg_equal(const char *s, const char *pkg, size_t n)
++{
++	return strncmp(s, pkg, n) == 0;
++}
++
++/* path starts with prefix and the next byte terminates a component */
++static inline bool component_prefix(const char *path, const char *prefix, const char *pkg)
++{
++	size_t n = strlen(prefix);
++	size_t m = strlen(pkg);
++
++	if (strncmp(path, prefix, n) != 0)
++		return false;
++	path += n;
++	if (!pkg_equal(path, pkg, m))
++		return false;
++	return path[m] == '\0' || path[m] == '/';
++}
++
++/* "/data/user/<n>/<pkg>" and "/data/user_de/<n>/<pkg>" */
++static bool match_user_dir(const char *path, const char *pkg)
++{
++	static const char *const prefixes[] = { "/data/user/", "/data/user_de/" };
++	unsigned int i;
++
++	for (i = 0; i < 2; i++) {
++		const char *p = path;
++		size_t n = strlen(prefixes[i]);
++
++		if (strncmp(p, prefixes[i], n) != 0)
++			continue;
++		p += n;
++		if (*p < '0' || *p > '9')
++			continue;
++		while (*p >= '0' && *p <= '9')
++			p++;
++		if (*p != '/')
++			continue;
++		p++;
++		if (pkg_equal(p, pkg, strlen(pkg)) &&
++		    (p[strlen(pkg)] == '\0' || p[strlen(pkg)] == '/'))
++			return true;
++	}
++	return false;
++}
++
++/* "/data/media/<n>/Android/data/<pkg>", "/storage/emulated/<n>/Android/data/<pkg>",
++ * "/sdcard/Android/data/<pkg>" */
++static bool match_media_dir(const char *path, const char *pkg)
++{
++	static const char *const roots[] = {
++		"/data/media/",
++		"/storage/emulated/",
++		"/mnt/user/",
++		"/sdcard/",
++	};
++	unsigned int i;
++
++	for (i = 0; i < 4; i++) {
++		const char *p = path;
++		size_t n = strlen(roots[i]);
++
++		if (strncmp(p, roots[i], n) != 0)
++			continue;
++		p += n;
++		if (i == 3) {
++			/* /sdcard/Android/data/<pkg> */
++			if (strncmp(p, "Android/data/", 13) != 0)
++				continue;
++			p += 13;
++		} else {
++			while (*p >= '0' && *p <= '9')
++				p++;
++			if (strncmp(p, "/Android/data/", 14) != 0)
++				continue;
++			p += 14;
++		}
++		if (pkg_equal(p, pkg, strlen(pkg)) &&
++		    (p[strlen(pkg)] == '\0' || p[strlen(pkg)] == '/'))
++			return true;
++	}
++	return false;
++}
++
++/*
++ * /data/app/<pkg>-<suffix>/...  or  /data/app/~~<hash>/<pkg>-<suffix>/...
++ * The suffix is not stable across installs, so only "<pkg>-" is compared.
++ */
++static bool match_apk_dir(const char *path, const char *pkg)
++{
++	const char *p;
++	size_t m = strlen(pkg);
++
++	if (strncmp(path, "/data/app/", 10) != 0)
++		return false;
++	p = path + 10;
++	if (p[0] == '~' && p[1] == '~') {
++		/* skip the "~~<hash>" component */
++		while (*p && *p != '/')
++			p++;
++		if (*p != '/')
++			return false;
++		p++;
++	}
++	if (!pkg_equal(p, pkg, m))
++		return false;
++	return p[m] == '-';
++}
++
++int xe_match_path(const struct xechide_rule *rule, const char *path)
++{
++	const char *pkg = (const char *)rule->pkg;
++
++	if (!path || path[0] != '/')
++		return false;
++	if (!(rule->flags & XECHIDE_RF_PATHS))
++		return false;
++
++	if (match_apk_dir(path, pkg))
++		return true;
++	if (component_prefix(path, "/data/data/", pkg))
++		return true;
++	if (match_user_dir(path, pkg))
++		return true;
++	if (match_media_dir(path, pkg))
++		return true;
++	return false;
++}
++
++/* readdir: the name is only one component, so compare it exactly. */
++int xe_match_dirent(const struct xechide_rule *rule, unsigned int dir, const char *name, int namelen)
++{
++	const char *pkg = (const char *)rule->pkg;
++	size_t n = namelen < 0 ? strlen(name) : (size_t)namelen;
++
++	if (!(rule->flags & XECHIDE_RF_PATHS))
++		return false;
++
++	switch (dir) {
++	case XE_DIR_APP:
++		/* "<pkg>-<random>" */
++		return n > strlen(pkg) && pkg_equal(name, pkg, strlen(pkg)) && name[strlen(pkg)] == '-';
++	case XE_DIR_DATA:
++	case XE_DIR_MEDIA:
++		return n == strlen(pkg) && pkg_equal(name, pkg, n);
++	default:
++		return false;
++	}
++}
+diff --git a/new/kernel/xechide/xechide_parcel.c b/kernel/xechide/xechide_parcel.c
+new file mode 100644
+index 0000000..c3f22df
+--- /dev/null
++++ b/kernel/xechide/xechide_parcel.c
+@@ -0,0 +1,475 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * XEChide - binder parcel rewriting.
++ *
++ * Every decision is made on a private, bounds-checked copy of the parcel. Two
++ * strategies exist, in order of preference:
++ *
++ *   1. structural removal - the parcel is a `List<PackageInfo>` or a
++ *      `String[]` and every element boundary can be proven from the parcel
++ *      itself. The hidden element is removed and the container count updated.
++ *   2. in-place substitution - a length-preserving rename of the hidden
++ *      package name. The parcel layout does not change at all, so this cannot
++ *      desynchronise the receiver.
++ *
++ * Anything that does not validate is left untouched (the caller keeps the
++ * original parcel). No allocation happens here.
++ */
++#include "xechide.h"
++
++#ifdef XECHIDE_HOST
++#include <stdbool.h>
++#include <stddef.h>
++#include <string.h>
++#else
++#include <linux/string.h>
++#include <linux/types.h>
++#endif
++
++#define XE_MAX_ITEMS 512
++#define XE_MAX_NAMES 16
++#define XE_MAX_NAME_LEN 127
++
++#define XE_ALIGN4(x) (((x) + 3u) & ~3u)
++
++struct xe_name {
++	const char *p;
++	unsigned int len;
++};
++
++struct xe_item {
++	unsigned int off;      /* element start */
++	unsigned int name_off; /* package name bytes */
++	unsigned int name_len;
++	unsigned int end; /* filled in once the next element is known */
++};
++
++/*
++ * Scratch, not stack: a `List<PackageInfo>` reply can carry hundreds of
++ * elements and a kernel stack cannot afford 8 KiB. The binder glue serialises
++ * every call with its scratch-buffer lock, so a single instance is enough.
++ */
++static struct xe_item xe_items[XE_MAX_ITEMS];
++static int xe_hidden[XE_MAX_ITEMS];
++
++static inline unsigned int rd32(const unsigned char *p)
++{
++	unsigned int v;
++
++	memcpy(&v, p, 4);
++	return v;
++}
++
++static inline int rds32(const unsigned char *p)
++{
++	int v;
++
++	memcpy(&v, p, 4);
++	return v;
++}
++
++static inline void wr32(unsigned char *p, unsigned int v)
++{
++	memcpy(p, &v, 4);
++}
++
++static bool zeros(const unsigned char *p, unsigned int n)
++{
++	unsigned int i;
++
++	for (i = 0; i < n; i++)
++		if (p[i])
++			return false;
++	return true;
++}
++
++/* 4 (length) + 2n (chars) + 2 (nul), 4-byte aligned */
++static unsigned int str16_total(unsigned int n)
++{
++	return XE_ALIGN4(4u + 2u * n + 2u);
++}
++
++/* 4 (length) + n (chars) + 1 (nul), 4-byte aligned */
++static unsigned int str8_total(unsigned int n)
++{
++	return XE_ALIGN4(4u + n + 1u);
++}
++
++static inline bool name_char(unsigned char c)
++{
++	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
++	       c == '_';
++}
++
++static bool parcel_name_ok(const unsigned char *p, unsigned int n)
++{
++	unsigned int i;
++
++	if (n == 0 || n > XE_MAX_NAME_LEN)
++		return false;
++	for (i = 0; i < n; i++)
++		if (!name_char(p[i]))
++			return false;
++	return true;
++}
++
++/*
++ * Match the parcel string at @off (the length prefix) against @name.
++ * Returns the total size of the string, 0 when it does not match.
++ */
++static unsigned int str_match_at(const unsigned char *buf, unsigned int len, unsigned int off,
++				 const struct xe_name *name, int *enc)
++{
++	unsigned int n = name->len, total, i;
++
++	if (off > len || len - off < 4)
++		return 0;
++	if (rds32(buf + off) != (int)n)
++		return 0;
++
++	total = str16_total(n);
++	if (off + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < n; i++) {
++			if (buf[off + 4 + 2 * i] != (unsigned char)name->p[i] || buf[off + 5 + 2 * i] != 0) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok && zeros(buf + off + 4 + 2 * n, total - 4 - 2 * n)) {
++			*enc = 16;
++			return total;
++		}
++	}
++
++	total = str8_total(n);
++	if (off + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < n; i++) {
++			if (buf[off + 4 + i] != (unsigned char)name->p[i]) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok && zeros(buf + off + 4 + n, total - 4 - n)) {
++			*enc = 8;
++			return total;
++		}
++	}
++	return 0;
++}
++
++/*
++ * Total size of any parcel string at @off, 0 when malformed.
++ * String16 is preferred when the high byte of every character is zero.
++ */
++static unsigned int str_len_at(const unsigned char *buf, unsigned int len, unsigned int off, int *is_null)
++{
++	int n;
++	unsigned int un, total, i;
++
++	*is_null = 0;
++	if (off > len || len - off < 4)
++		return 0;
++	n = rds32(buf + off);
++	if (n == -1) {
++		*is_null = 1;
++		return 4;
++	}
++	if (n < 0)
++		return 0;
++	un = (unsigned int)n;
++	if (un > XE_MAX_NAME_LEN)
++		return 0;
++
++	total = str16_total(un);
++	if (off + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < un; i++) {
++			if (buf[off + 5 + 2 * i] != 0) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok && zeros(buf + off + 4 + 2 * un, total - 4 - 2 * un))
++			return total;
++	}
++	total = str8_total(un);
++	if (off + total <= len && zeros(buf + off + 4 + un, total - 4 - un))
++		return total;
++	return 0;
++}
++
++static int name_index(const struct xe_name *names, int n_names, const unsigned char *p, unsigned int len)
++{
++	int i;
++
++	if (!p || !len)
++		return -1;
++	for (i = 0; i < n_names; i++)
++		if (names[i].len == len && memcmp(names[i].p, p, len) == 0)
++			return i;
++	return -1;
++}
++
++/*
++ * A `List<PackageInfo>` element starts with the presence int32 (1) followed by
++ * the packageName string - both String16 and String8 encodings have shipped.
++ * The rest of the element is opaque, which is why the caller validates the
++ * element *count* before trusting any of this.
++ */
++static unsigned int item_start_at(const unsigned char *buf, unsigned int len, unsigned int off,
++				  unsigned int *name_off, unsigned int *name_len)
++{
++	unsigned int n, total, i;
++
++	if (off + 8 > len)
++		return 0;
++	if (rd32(buf + off) != 1)
++		return 0;
++	n = rd32(buf + off + 4);
++	if (n == 0 || n > XE_MAX_NAME_LEN)
++		return 0;
++
++	total = str16_total(n);
++	if (off + 4 + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < n; i++) {
++			if (buf[off + 9 + 2 * i] != 0 || !name_char(buf[off + 8 + 2 * i])) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok && zeros(buf + off + 8 + 2 * n, total - 4 - 2 * n)) {
++			*name_off = off + 8;
++			*name_len = n;
++			return 4 + total;
++		}
++	}
++
++	total = str8_total(n);
++	if (off + 4 + total <= len && parcel_name_ok(buf + off + 8, n) &&
++	    zeros(buf + off + 8 + n, total - 4 - n)) {
++		*name_off = off + 8;
++		*name_len = n;
++		return 4 + total;
++	}
++	return 0;
++}
++
++/* [int32 no-exception][int32 count][count elements] */
++static unsigned int pkg_list_scan(const unsigned char *buf, unsigned int len, struct xe_item *items,
++				  unsigned int max_items, unsigned int *count_out)
++{
++	unsigned int n, off, count = 0;
++
++	if (len < 8 || rd32(buf) != 0)
++		return 0;
++	n = rd32(buf + 4);
++	if (n == 0 || n > max_items || n > len / 12)
++		return 0;
++
++	for (off = 8; off + 8 <= len && count < max_items;) {
++		unsigned int name_off = 0, name_len = 0, total;
++
++		total = item_start_at(buf, len, off, &name_off, &name_len);
++		if (!total) {
++			off += 4;
++			continue;
++		}
++		items[count].off = off;
++		items[count].name_off = name_off;
++		items[count].name_len = name_len;
++		count++;
++		off += total;
++	}
++	*count_out = count;
++	if (count != n || items[0].off != 8)
++		return 0;
++	return count;
++}
++
++/* returns the new length, or 0 when nothing was removed */
++static unsigned int rebuild_pkg_list(unsigned char *buf, unsigned int len, const struct xe_name *names,
++				     int n_names)
++{
++	struct xe_item *items = xe_items;
++	unsigned int count = 0, n, kept = 0, wr, i;
++
++	n = pkg_list_scan(buf, len, items, XE_MAX_ITEMS, &count);
++	if (n == 0)
++		return 0;
++
++	for (i = 0; i < n; i++)
++		items[i].end = (i + 1 < n) ? items[i + 1].off : len;
++
++	for (i = 0; i < n; i++) {
++		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
++			continue;
++		kept++;
++	}
++	if (kept == n)
++		return 0; /* nothing hidden */
++
++	wr = 8;
++	for (i = 0; i < n; i++) {
++		unsigned int size;
++
++		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
++			continue;
++		size = items[i].end - items[i].off;
++		if (wr != items[i].off)
++			memmove(buf + wr, buf + items[i].off, size);
++		wr += size;
++	}
++	wr32(buf + 4, kept);
++	return wr;
++}
++
++/* `String[]` reply: [int32 no-exception][int32 count][strings...] */
++static unsigned int rebuild_string_array(unsigned char *buf, unsigned int len, const struct xe_name *names,
++					 int n_names)
++{
++	struct xe_item *items = xe_items;
++	int *hidden = xe_hidden;
++	unsigned int n, off = 8, count, kept = 0, wr, i;
++
++	if (len < 8 || rd32(buf) != 0)
++		return 0;
++	n = rd32(buf + 4);
++	if (n == 0 || n > XE_MAX_ITEMS)
++		return 0;
++
++	for (count = 0; count < n; count++) {
++		int is_null = 0, enc = 0;
++		unsigned int total = str_len_at(buf, len, off, &is_null);
++
++		if (!total)
++			return 0;
++		items[count].off = off;
++		hidden[count] = -1;
++		if (!is_null) {
++			for (i = 0; i < (unsigned int)n_names; i++) {
++				if (str_match_at(buf, len, off, &names[i], &enc) == total) {
++					hidden[count] = (int)i;
++					break;
++				}
++			}
++		}
++		off += total;
++	}
++	if (off != len)
++		return 0; /* trailing bytes: not the shape we expect */
++
++	for (i = 0; i < n; i++)
++		if (hidden[i] < 0)
++			kept++;
++	if (kept == n)
++		return 0;
++
++	wr = 8;
++	for (i = 0; i < n; i++) {
++		unsigned int size = (i + 1 < n ? items[i + 1].off : len) - items[i].off;
++
++		if (hidden[i] >= 0)
++			continue;
++		if (wr != items[i].off)
++			memmove(buf + wr, buf + items[i].off, size);
++		wr += size;
++	}
++	wr32(buf + 4, kept);
++	return wr;
++}
++
++/* length-preserving rename; at least one name must have been replaced */
++static bool substitute(unsigned char *buf, unsigned int len, const struct xe_name *names, int n_names)
++{
++	char fake[XE_MAX_NAME_LEN + 1];
++	bool changed = false;
++	unsigned int off;
++	int i;
++
++	for (i = 0; i < n_names; i++) {
++		unsigned int n = names[i].len, k;
++
++		if (n == 0 || n > XE_MAX_NAME_LEN)
++			continue;
++		for (k = 0; k < n; k++)
++			fake[k] = names[i].p[k] == '.' ? '.' : 'q';
++		fake[n] = 0;
++		if (memcmp(fake, names[i].p, n) == 0)
++			fake[0] = names[i].p[0] == 'z' ? 'y' : 'z';
++
++		for (off = 0; off + 4 <= len; off++) {
++			int enc = 0;
++			unsigned int total, k2;
++
++			if (rds32(buf + off) != (int)n)
++				continue;
++			total = str_match_at(buf, len, off, &names[i], &enc);
++			if (!total)
++				continue;
++			for (k2 = 0; k2 < n; k2++) {
++				if (enc == 16) {
++					buf[off + 4 + 2 * k2] = (unsigned char)fake[k2];
++					buf[off + 5 + 2 * k2] = 0;
++				} else {
++					buf[off + 4 + k2] = (unsigned char)fake[k2];
++				}
++			}
++			changed = true;
++			off += total - 1;
++		}
++	}
++	return changed;
++}
++
++/*
++ * Filter one parcel.
++ *
++ * @buf/@len : mutable private copy
++ * @names    : hidden package names visible to this caller
++ * @mode     : XE_PARCEL_* describing what happened
++ *
++ * Returns the new parcel length (<= len), or 0 when the parcel must not be
++ * modified and the caller has to send the original bytes.
++ */
++unsigned int xe_parcel_filter(unsigned char *buf, unsigned int len, const char *const *names, int n_names,
++			      unsigned int *mode)
++{
++	struct xe_name list[XE_MAX_NAMES];
++	unsigned int new_len;
++	int i;
++
++	*mode = XE_PARCEL_NONE;
++	if (!buf || len < 8 || n_names <= 0)
++		return 0;
++	if (n_names > XE_MAX_NAMES)
++		n_names = XE_MAX_NAMES;
++	for (i = 0; i < n_names; i++) {
++		list[i].p = names[i];
++		list[i].len = names[i] ? (unsigned int)strlen(names[i]) : 0;
++		if (list[i].len > XE_MAX_NAME_LEN)
++			return 0;
++	}
++
++	new_len = rebuild_pkg_list(buf, len, list, n_names);
++	if (new_len && new_len <= len) {
++		*mode = XE_PARCEL_REBUILT;
++		return new_len;
++	}
++	new_len = rebuild_string_array(buf, len, list, n_names);
++	if (new_len && new_len <= len) {
++		*mode = XE_PARCEL_REBUILT;
++		return new_len;
++	}
++	if (substitute(buf, len, list, n_names)) {
++		*mode = XE_PARCEL_REWRITTEN;
++		return len;
++	}
++	return 0;
++}
+diff --git a/uapi/supercall.h b/uapi/supercall.h
+index 259e4e1..a2ecf64 100644
+--- a/uapi/supercall.h
++++ b/uapi/supercall.h
+@@ -206,4 +206,16 @@ static const __u32 KSU_IOCTL_GET_SULOG_FD = _IOW('K', 20, struct ksu_get_sulog_f
+ static const __u32 KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT = _IO('K', 21);
+ static const __u32 KSU_IOCTL_LOOKUP_SYMBOLS = _IOW('K', 22, struct ksu_lookup_symbols_cmd);
+ 
++/*
++ * XEChide - kernel-level app/path hiding.
++ *
++ * The argument of GET/SET is `struct xechide_config`, STATS returns
++ * `struct xechide_stats`; both live in kernel/xechide/xechide.h and are shared
++ * verbatim with the manager and the root helper. 0xE0..0xE2 are outside the
++ * range KernelSU itself uses.
++ */
++static const __u32 KSU_IOCTL_XECHIDE_GET = _IOC(_IOC_READ, 'K', 0xE0, 0);
++static const __u32 KSU_IOCTL_XECHIDE_SET = _IOC(_IOC_WRITE, 'K', 0xE1, 0);
++static const __u32 KSU_IOCTL_XECHIDE_STATS = _IOC(_IOC_READ, 'K', 0xE2, 0);
++
+ #endif
