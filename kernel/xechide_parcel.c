@@ -41,6 +41,7 @@ struct xe_item {
 	unsigned int off;      /* element start */
 	unsigned int name_off; /* package name bytes */
 	unsigned int name_len;
+	unsigned int name_enc; /* 8 or 16 */
 	unsigned int end; /* filled in once the next element is known */
 };
 
@@ -203,18 +204,6 @@ static unsigned int str_len_at(const unsigned char *buf, unsigned int len, unsig
 	return 0;
 }
 
-static int name_index(const struct xe_name *names, int n_names, const unsigned char *p, unsigned int len)
-{
-	int i;
-
-	if (!p || !len)
-		return -1;
-	for (i = 0; i < n_names; i++)
-		if (names[i].len == len && memcmp(names[i].p, p, len) == 0)
-			return i;
-	return -1;
-}
-
 /*
  * A `List<PackageInfo>` element starts with the presence int32 (1) followed by
  * the packageName string - both String16 and String8 encodings have shipped.
@@ -222,7 +211,7 @@ static int name_index(const struct xe_name *names, int n_names, const unsigned c
  * element *count* before trusting any of this.
  */
 static unsigned int item_start_at(const unsigned char *buf, unsigned int len, unsigned int off,
-				  unsigned int *name_off, unsigned int *name_len)
+				  unsigned int *name_off, unsigned int *name_len, unsigned int *name_enc)
 {
 	unsigned int n, total, i;
 
@@ -247,6 +236,7 @@ static unsigned int item_start_at(const unsigned char *buf, unsigned int len, un
 		if (ok && zeros(buf + off + 8 + 2 * n, total - 4 - 2 * n)) {
 			*name_off = off + 8;
 			*name_len = n;
+			*name_enc = 16;
 			return 4 + total;
 		}
 	}
@@ -256,9 +246,41 @@ static unsigned int item_start_at(const unsigned char *buf, unsigned int len, un
 	    zeros(buf + off + 8 + n, total - 4 - n)) {
 		*name_off = off + 8;
 		*name_len = n;
+		*name_enc = 8;
 		return 4 + total;
 	}
 	return 0;
+}
+
+/* Package names are stored as String16 in some Android releases and as String8
+ * in others; compare characters, never raw bytes. */
+static bool item_name_eq(const unsigned char *buf, const struct xe_item *it, const struct xe_name *name)
+{
+	unsigned int i;
+
+	if (!name->len || name->len != it->name_len)
+		return false;
+	for (i = 0; i < name->len; i++) {
+		if (it->name_enc == 16) {
+			if (buf[it->name_off + 2 * i] != (unsigned char)name->p[i] ||
+			    buf[it->name_off + 2 * i + 1] != 0)
+				return false;
+		} else if (buf[it->name_off + i] != (unsigned char)name->p[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static int item_name_index(const unsigned char *buf, const struct xe_item *it, const struct xe_name *names,
+			   int n_names)
+{
+	int i;
+
+	for (i = 0; i < n_names; i++)
+		if (item_name_eq(buf, it, &names[i]))
+			return i;
+	return -1;
 }
 
 /* [int32 no-exception][int32 count][count elements] */
@@ -274,9 +296,9 @@ static unsigned int pkg_list_scan(const unsigned char *buf, unsigned int len, st
 		return 0;
 
 	for (off = 8; off + 8 <= len && count < max_items;) {
-		unsigned int name_off = 0, name_len = 0, total;
+		unsigned int name_off = 0, name_len = 0, name_enc = 0, total;
 
-		total = item_start_at(buf, len, off, &name_off, &name_len);
+		total = item_start_at(buf, len, off, &name_off, &name_len, &name_enc);
 		if (!total) {
 			off += 4;
 			continue;
@@ -284,6 +306,7 @@ static unsigned int pkg_list_scan(const unsigned char *buf, unsigned int len, st
 		items[count].off = off;
 		items[count].name_off = name_off;
 		items[count].name_len = name_len;
+		items[count].name_enc = name_enc;
 		count++;
 		off += total;
 	}
@@ -308,7 +331,7 @@ static unsigned int rebuild_pkg_list(unsigned char *buf, unsigned int len, const
 		items[i].end = (i + 1 < n) ? items[i + 1].off : len;
 
 	for (i = 0; i < n; i++) {
-		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
+		if (item_name_index(buf, &items[i], names, n_names) >= 0)
 			continue;
 		kept++;
 	}
@@ -319,7 +342,7 @@ static unsigned int rebuild_pkg_list(unsigned char *buf, unsigned int len, const
 	for (i = 0; i < n; i++) {
 		unsigned int size;
 
-		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
+		if (item_name_index(buf, &items[i], names, n_names) >= 0)
 			continue;
 		size = items[i].end - items[i].off;
 		if (wr != items[i].off)
@@ -354,6 +377,8 @@ static unsigned int rebuild_string_array(unsigned char *buf, unsigned int len, c
 		hidden[count] = -1;
 		if (!is_null) {
 			for (i = 0; i < (unsigned int)n_names; i++) {
+				if (!names[i].len)
+					continue;
 				if (str_match_at(buf, len, off, &names[i], &enc) == total) {
 					hidden[count] = (int)i;
 					break;
@@ -446,7 +471,7 @@ unsigned int xe_parcel_filter(unsigned char *buf, unsigned int len, const char *
 	int i;
 
 	*mode = XE_PARCEL_NONE;
-	if (!buf || len < 8 || n_names <= 0)
+	if (!buf || !names || len < 8 || n_names <= 0)
 		return 0;
 	if (n_names > XE_MAX_NAMES)
 		n_names = XE_MAX_NAMES;
