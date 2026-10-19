@@ -20,8 +20,10 @@ String8 encodings, `String[]` arrays, request parcels) and asserts that
 - a container that does not validate is never restructured - only renamed;
 - a parcel without a hidden name is left completely untouched;
 - path/dirent matching accepts the real Android layouts (`/data/app/~~hash/`,
-  `/data/user/<n>`, `/data/media/<n>/Android/data`, `/sdcard/Android/data`)
-  and rejects look-alike names.
+  `/data/user/<n>`, `/data/media/<n>/Android/data`, `/sdcard/Android/data`,
+  `/data/system/packages.list`) and rejects look-alike names;
+- component-shaped names are renamed on the package part only
+  (`pkg:remote`, `pkg/.MainActivity`), while list removal stays exact-match.
 
 Then `make -C tests/host fuzz` builds the same parser with
 `-fsanitize=address,undefined` and feeds it 200k deterministic random parcels
