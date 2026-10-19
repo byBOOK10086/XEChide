@@ -47,7 +47,6 @@
     <string name="error_no_targets">请至少选择一个目标应用，或开启“对所有非 root 应用生效”。</string>
     <string name="error_no_rules">当前选择无法生成任何规则，请重新选择应用。</string>
     <string name="error_too_many_rules">当前选择会生成 %1$d 条规则，超过上限 %2$d。请减少隐藏应用或目标应用。</string>
-    <string name="error_invalid_config">无法生成配置：%1$s</string>
     <string name="error_operation">操作失败：%1$s</string>
     <string name="snack_apply_success">配置已应用：%1$d 条规则。</string>
     <string name="snack_apply_failed">应用失败（退出码 %1$d），详情见状态卡片。</string>
