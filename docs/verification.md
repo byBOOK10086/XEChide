@@ -57,7 +57,19 @@ adb shell su -c '/data/adb/xechide/bin/xechide-ctl stats'
 adb shell su -c 'pm list packages | grep com.example.hidden'
   expect: the package is listed. XEChide does not and cannot hide from root.
 
-### 2.8 fail-open
+### 2.8 process / task lists (new)
+adb shell dumpsys activity processes | grep com.example.hidden
+  expect: no output (the reply is filtered on IActivityManager)
+adb shell ps -A | grep com.example.hidden
+  expect: no output (readdir of /proc is filtered)
+
+### 2.9 the package database is not a bypass
+adb shell cat /data/system/packages.list | grep com.example.hidden
+adb shell cat /data/system/packages.xml | grep com.example.hidden
+  expect: "Permission denied" or no such file for a target uid; this is
+  intentional - parsing the database must not be a way around the binder filter
+
+### 2.10 fail-open
 Reboot with the manager disabled (freeze it) and check that the device boots and
 that nothing is hidden: an empty configuration must change no behaviour.
 ```
@@ -66,7 +78,7 @@ that nothing is hidden: an empty configuration must change no behaviour.
 
 | Component | Toolchain | Result |
 |---|---|---|
-| host tests | Zig 0.15.2 (clang), `-DXECHIDE_HOST`, ASan+UBSan fuzz | 62 assertions + 200k fuzz iterations pass |
+| host tests | Zig 0.15.2 (clang), `-DXECHIDE_HOST`, ASan+UBSan fuzz | 72 assertions + 200k fuzz iterations pass |
 | root helper | Zig 0.15.2, `aarch64-linux-musl -static` | 2,731,592-byte ARM64 binary |
 | manager APK | JDK 17 + Gradle 8.9 + AGP 8.7.3 + compileSdk 35 | **`BUILD SUCCESSFUL`**, 23,469,031-byte debug APK, helper bundled at `assets/xechide-ctl-arm64` |
 
