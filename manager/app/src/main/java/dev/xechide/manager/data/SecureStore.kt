@@ -30,10 +30,13 @@ class SecureStore(context: Context) {
     fun save(config: ManagerConfig) {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
+        // Capture the generated IV before doFinal(); some providers reset the
+        // cipher state (including getIV()) when finalizing.
+        val iv = cipher.iv
         val plaintext = ConfigCodec.encodeJson(config).toByteArray(Charsets.UTF_8)
         val ciphertext = cipher.doFinal(plaintext)
         val committed = preferences.edit()
-            .putString(KEY_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(KEY_IV, Base64.encodeToString(iv, Base64.NO_WRAP))
             .putString(KEY_CIPHERTEXT, Base64.encodeToString(ciphertext, Base64.NO_WRAP))
             .commit()
         if (!committed) {
