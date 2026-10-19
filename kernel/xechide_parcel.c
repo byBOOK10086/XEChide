@@ -162,6 +162,66 @@ static unsigned int str_match_at(const unsigned char *buf, unsigned int len, uns
 	return 0;
 }
 
+
+/*
+ * Component-style match: the parcel string starts with @name and continues with
+ * ':' (process name, e.g. "com.example.hidden:remote") or '/' (flattened
+ * ComponentName, e.g. "com.example.hidden/.Main"). Only the package part is
+ * renamed, the suffix is left untouched, so the string keeps its length.
+ */
+static unsigned int str_component_at(const unsigned char *buf, unsigned int len, unsigned int off,
+				     const struct xe_name *name, int *enc)
+{
+	unsigned int n = name->len, slen, total, i;
+
+	if (off > len || len - off < 4)
+		return 0;
+	slen = rd32(buf + off);
+	if (slen <= n || slen > XE_MAX_NAME_LEN)
+		return 0;
+
+	total = str16_total(slen);
+	if (off + total <= len) {
+		bool ok = true;
+
+		for (i = 0; i < n; i++) {
+			if (buf[off + 4 + 2 * i] != (unsigned char)name->p[i] || buf[off + 5 + 2 * i] != 0) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok && buf[off + 5 + 2 * n] == 0) {
+			unsigned char sep = buf[off + 4 + 2 * n];
+
+			if (sep == ':' || sep == '/') {
+				*enc = 16;
+				return total;
+			}
+		}
+	}
+
+	total = str8_total(slen);
+	if (off + total <= len) {
+		bool ok = true;
+
+		for (i = 0; i < n; i++) {
+			if (buf[off + 4 + i] != (unsigned char)name->p[i]) {
+				ok = false;
+				break;
+			}
+		}
+		if (ok) {
+			unsigned char sep = buf[off + 4 + n];
+
+			if (sep == ':' || sep == '/') {
+				*enc = 8;
+				return total;
+			}
+		}
+	}
+	return 0;
+}
+
 /*
  * Total size of any parcel string at @off, 0 when malformed.
  * String16 is preferred when the high byte of every character is zero.
@@ -433,9 +493,11 @@ static bool substitute(unsigned char *buf, unsigned int len, const struct xe_nam
 			int enc = 0;
 			unsigned int total, k2;
 
-			if (rds32(buf + off) != (int)n)
+			if (rds32(buf + off) < (int)n)
 				continue;
 			total = str_match_at(buf, len, off, &names[i], &enc);
+			if (!total)
+				total = str_component_at(buf, len, off, &names[i], &enc);
 			if (!total)
 				continue;
 			for (k2 = 0; k2 < n; k2++) {
