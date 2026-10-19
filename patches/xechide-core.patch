@@ -204,10 +204,10 @@ index 0000000..c387579
 +Counters are available through `KSU_IOCTL_XECHIDE_STATS` (`ctl/README.md`).
 diff --git a/new/kernel/xechide/xechide.h b/kernel/xechide/xechide.h
 new file mode 100644
-index 0000000..2a22157
+index 0000000..967bfac
 --- /dev/null
 +++ b/kernel/xechide/xechide.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,130 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - kernel-level app & path hiding.
@@ -312,6 +312,8 @@ index 0000000..2a22157
 +
 +/* xechide_core.c */
 +bool xechide_uid_has_rules(u32 uid, u32 what);
++bool xechide_self_hide_enabled(void);
++bool xechide_on_adb_sb(const void *sb);
 +bool xechide_hide_path(u32 uid, const char *path);
 +bool xechide_hide_dirent(u32 uid, u32 dir, const char *name, int namelen);
 +unsigned int xechide_filter_parcel(u32 uid, unsigned char *buf, unsigned int len, unsigned int *mode);
@@ -739,10 +741,10 @@ index 0000000..4eb9208
 +}
 diff --git a/new/kernel/xechide/xechide_core.c b/kernel/xechide/xechide_core.c
 new file mode 100644
-index 0000000..d79f1df
+index 0000000..f29c186
 --- /dev/null
 +++ b/kernel/xechide/xechide_core.c
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,474 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - kernel rule engine.
@@ -755,10 +757,12 @@ index 0000000..d79f1df
 +#include <linux/atomic.h>
 +#include <linux/cred.h>
 +#include <linux/errno.h>
++#include <linux/fs.h>
 +#include <linux/init.h>
 +#include <linux/jiffies.h>
 +#include <linux/kernel.h>
 +#include <linux/lockdep.h>
++#include <linux/namei.h>
 +#include <linux/pid.h>
 +#include <linux/rcupdate.h>
 +#include <linux/sched.h>
@@ -778,6 +782,44 @@ index 0000000..d79f1df
 +static DEFINE_SPINLOCK(xechide_cfg_lock);
 +
 +static atomic_t xechide_stats[XE_STAT_MAX];
++
++/*
++ * L0 self-hiding is cheap: instead of resolving a path for every file
++ * operation of every uid, the superblock of /data/adb is cached once and the
++ * hooks only pay for it when the inode actually lives there. A stale pointer
++ * is only ever *compared*, never dereferenced.
++ */
++static struct super_block *xe_adb_sb;
++
++static void xechide_cache_adb_sb(void)
++{
++	struct path path;
++
++	if (xe_adb_sb || kern_path("/data/adb", LOOKUP_FOLLOW, &path))
++		return;
++	xe_adb_sb = path.dentry->d_sb;
++	path_put(&path);
++	pr_info("xechide: self-hide bound to /data/adb (sb %p)\n", xe_adb_sb);
++}
++
++bool xechide_on_adb_sb(const void *sb)
++{
++	return sb && xe_adb_sb && sb == xe_adb_sb;
++}
++
++bool xechide_self_hide_enabled(void)
++{
++	const struct xechide_config *cfg;
++	bool on = false;
++
++	if (!xechide_enabled)
++		return false;
++	rcu_read_lock();
++	cfg = rcu_dereference(xechide_cfg);
++	on = cfg && (cfg->flags & XECHIDE_CF_HIDE_SELF);
++	rcu_read_unlock();
++	return on;
++}
 +
 +void xechide_stat_inc(int which)
 +{
@@ -899,15 +941,15 @@ index 0000000..d79f1df
 +	if (!xechide_enabled || uid_protected(uid) || !path || path[0] != '/')
 +		return false;
 +
-+	if (is_self_path(path)) {
-+		xechide_stat_inc(XE_STAT_PATH);
-+		return true;
-+	}
-+
 +	rcu_read_lock();
 +	cfg = rcu_dereference(xechide_cfg);
 +	if (!cfg)
 +		goto out;
++
++	if ((cfg->flags & XECHIDE_CF_HIDE_SELF) && is_self_path(path)) {
++		hidden = true;
++		goto out;
++	}
 +
 +	for (i = 0; i < cfg->n_rules; i++) {
 +		const struct xechide_rule *rule = &cfg->rules[i];
@@ -1105,6 +1147,7 @@ index 0000000..d79f1df
 +		synchronize_rcu();
 +		kfree(old);
 +	}
++	xechide_cache_adb_sb();
 +	pr_info("xechide: config updated, %u rule(s), flags 0x%x\n", cfg->n_rules, cfg->flags);
 +	return 0;
 +}
@@ -1156,6 +1199,7 @@ index 0000000..d79f1df
 +int __init xechide_init(void)
 +{
 +	xechide_enabled = true;
++	xechide_cache_adb_sb();
 +	pr_info("xechide: rule engine ready (%u max rules)\n", XECHIDE_MAX_RULES);
 +	return 0;
 +}
@@ -1177,10 +1221,10 @@ index 0000000..d79f1df
 +}
 diff --git a/new/kernel/xechide/xechide_lsm.c b/kernel/xechide/xechide_lsm.c
 new file mode 100644
-index 0000000..efe20b6
+index 0000000..6b3c1d9
 --- /dev/null
 +++ b/kernel/xechide/xechide_lsm.c
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,431 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - L0 enforcement.
@@ -1306,6 +1350,15 @@ index 0000000..efe20b6
 +	return XE_DIR_NONE;
 +}
 +
++/* Cheap gate for every hook: a uid with rules, or a filesystem that carries
++ * the project's own hidden path while self-hiding is enabled. */
++static bool xe_active(u32 uid, const struct super_block *sb)
++{
++	if (xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
++		return true;
++	return xechide_self_hide_enabled() && xechide_on_adb_sb(sb);
++}
++
 +/* ------------------------------------------------------------- L0 hooks --- */
 +
 +/* Filled in by xechide_lsm_init(); the originals are called for everything we
@@ -1324,7 +1377,7 @@ index 0000000..efe20b6
 +
 +	if (!xechide_enabled || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
 +		goto orig;
-+	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
++	if (!xe_active(uid, inode->i_sb))
 +		goto orig;
 +
 +	d = d_find_alias(inode);
@@ -1353,7 +1406,7 @@ index 0000000..efe20b6
 +	u32 uid = current_uid().val;
 +	char buf[XE_PATH_MAX];
 +
-+	if (xechide_enabled && path && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
++	if (xechide_enabled && path && xe_active(uid, path->dentry->d_sb)) {
 +		const char *p = xe_dentry_path(path->dentry, buf, sizeof(buf));
 +
 +		if (p && xechide_hide_path(uid, p)) {
@@ -1373,7 +1426,7 @@ index 0000000..efe20b6
 +	char buf[XE_PATH_MAX];
 +
 +	if (xechide_enabled && file && (mask & (MAY_READ | MAY_EXEC)) &&
-+	    xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC)) {
++	    xe_active(uid, file->f_path.dentry->d_sb)) {
 +		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
 +
 +		if (p && xechide_hide_path(uid, p)) {
@@ -1392,7 +1445,7 @@ index 0000000..efe20b6
 +	u32 uid = current_uid().val;
 +	char buf[XE_PATH_MAX];
 +
-+	if (xechide_enabled && file && xechide_uid_has_rules(uid, XECHIDE_RF_PATHS)) {
++	if (xechide_enabled && file && xe_active(uid, file->f_path.dentry->d_sb)) {
 +		const char *p = xe_dentry_path(file->f_path.dentry, buf, sizeof(buf));
 +
 +		if (p && xechide_hide_path(uid, p)) {
@@ -1472,7 +1525,7 @@ index 0000000..efe20b6
 +	st->swapped = 0;
 +	if (!xechide_enabled || !ctx || !ctx->actor || !file)
 +		return 1;
-+	if (!xechide_uid_has_rules(uid, XECHIDE_RF_PATHS | XECHIDE_RF_PROC))
++	if (!xe_active(uid, file->f_path.dentry->d_sb))
 +		return 1;
 +
 +	kind = dir_kind(file, buf, sizeof(buf));
@@ -1780,10 +1833,10 @@ index 0000000..f119eec
 +}
 diff --git a/new/kernel/xechide/xechide_parcel.c b/kernel/xechide/xechide_parcel.c
 new file mode 100644
-index 0000000..c3f22df
+index 0000000..db156e7
 --- /dev/null
 +++ b/kernel/xechide/xechide_parcel.c
-@@ -0,0 +1,475 @@
+@@ -0,0 +1,500 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - binder parcel rewriting.
@@ -1827,6 +1880,7 @@ index 0000000..c3f22df
 +	unsigned int off;      /* element start */
 +	unsigned int name_off; /* package name bytes */
 +	unsigned int name_len;
++	unsigned int name_enc; /* 8 or 16 */
 +	unsigned int end; /* filled in once the next element is known */
 +};
 +
@@ -1989,18 +2043,6 @@ index 0000000..c3f22df
 +	return 0;
 +}
 +
-+static int name_index(const struct xe_name *names, int n_names, const unsigned char *p, unsigned int len)
-+{
-+	int i;
-+
-+	if (!p || !len)
-+		return -1;
-+	for (i = 0; i < n_names; i++)
-+		if (names[i].len == len && memcmp(names[i].p, p, len) == 0)
-+			return i;
-+	return -1;
-+}
-+
 +/*
 + * A `List<PackageInfo>` element starts with the presence int32 (1) followed by
 + * the packageName string - both String16 and String8 encodings have shipped.
@@ -2008,7 +2050,7 @@ index 0000000..c3f22df
 + * element *count* before trusting any of this.
 + */
 +static unsigned int item_start_at(const unsigned char *buf, unsigned int len, unsigned int off,
-+				  unsigned int *name_off, unsigned int *name_len)
++				  unsigned int *name_off, unsigned int *name_len, unsigned int *name_enc)
 +{
 +	unsigned int n, total, i;
 +
@@ -2033,6 +2075,7 @@ index 0000000..c3f22df
 +		if (ok && zeros(buf + off + 8 + 2 * n, total - 4 - 2 * n)) {
 +			*name_off = off + 8;
 +			*name_len = n;
++			*name_enc = 16;
 +			return 4 + total;
 +		}
 +	}
@@ -2042,9 +2085,41 @@ index 0000000..c3f22df
 +	    zeros(buf + off + 8 + n, total - 4 - n)) {
 +		*name_off = off + 8;
 +		*name_len = n;
++		*name_enc = 8;
 +		return 4 + total;
 +	}
 +	return 0;
++}
++
++/* Package names are stored as String16 in some Android releases and as String8
++ * in others; compare characters, never raw bytes. */
++static bool item_name_eq(const unsigned char *buf, const struct xe_item *it, const struct xe_name *name)
++{
++	unsigned int i;
++
++	if (!name->len || name->len != it->name_len)
++		return false;
++	for (i = 0; i < name->len; i++) {
++		if (it->name_enc == 16) {
++			if (buf[it->name_off + 2 * i] != (unsigned char)name->p[i] ||
++			    buf[it->name_off + 2 * i + 1] != 0)
++				return false;
++		} else if (buf[it->name_off + i] != (unsigned char)name->p[i]) {
++			return false;
++		}
++	}
++	return true;
++}
++
++static int item_name_index(const unsigned char *buf, const struct xe_item *it, const struct xe_name *names,
++			   int n_names)
++{
++	int i;
++
++	for (i = 0; i < n_names; i++)
++		if (item_name_eq(buf, it, &names[i]))
++			return i;
++	return -1;
 +}
 +
 +/* [int32 no-exception][int32 count][count elements] */
@@ -2060,9 +2135,9 @@ index 0000000..c3f22df
 +		return 0;
 +
 +	for (off = 8; off + 8 <= len && count < max_items;) {
-+		unsigned int name_off = 0, name_len = 0, total;
++		unsigned int name_off = 0, name_len = 0, name_enc = 0, total;
 +
-+		total = item_start_at(buf, len, off, &name_off, &name_len);
++		total = item_start_at(buf, len, off, &name_off, &name_len, &name_enc);
 +		if (!total) {
 +			off += 4;
 +			continue;
@@ -2070,6 +2145,7 @@ index 0000000..c3f22df
 +		items[count].off = off;
 +		items[count].name_off = name_off;
 +		items[count].name_len = name_len;
++		items[count].name_enc = name_enc;
 +		count++;
 +		off += total;
 +	}
@@ -2094,7 +2170,7 @@ index 0000000..c3f22df
 +		items[i].end = (i + 1 < n) ? items[i + 1].off : len;
 +
 +	for (i = 0; i < n; i++) {
-+		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
++		if (item_name_index(buf, &items[i], names, n_names) >= 0)
 +			continue;
 +		kept++;
 +	}
@@ -2105,7 +2181,7 @@ index 0000000..c3f22df
 +	for (i = 0; i < n; i++) {
 +		unsigned int size;
 +
-+		if (name_index(names, n_names, buf + items[i].name_off, items[i].name_len) >= 0)
++		if (item_name_index(buf, &items[i], names, n_names) >= 0)
 +			continue;
 +		size = items[i].end - items[i].off;
 +		if (wr != items[i].off)
@@ -2140,6 +2216,8 @@ index 0000000..c3f22df
 +		hidden[count] = -1;
 +		if (!is_null) {
 +			for (i = 0; i < (unsigned int)n_names; i++) {
++				if (!names[i].len)
++					continue;
 +				if (str_match_at(buf, len, off, &names[i], &enc) == total) {
 +					hidden[count] = (int)i;
 +					break;
@@ -2232,7 +2310,7 @@ index 0000000..c3f22df
 +	int i;
 +
 +	*mode = XE_PARCEL_NONE;
-+	if (!buf || len < 8 || n_names <= 0)
++	if (!buf || !names || len < 8 || n_names <= 0)
 +		return 0;
 +	if (n_names > XE_MAX_NAMES)
 +		n_names = XE_MAX_NAMES;
