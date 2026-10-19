@@ -40,6 +40,7 @@ Matching covers the layouts Android really uses:
 | data | `/data/data/<pkg>/`, `/data/user/<n>/<pkg>/`, `/data/user_de/<n>/<pkg>/` |
 | obb/media | `/data/media/<n>/Android/data/<pkg>/`, `/storage/emulated/<n>/...`, `/sdcard/Android/data/<pkg>` |
 | proc | `/proc/<pid>/` where `<pid>`'s uid equals the rule's `hidden_uid` |
+| system database | `/data/system/packages.list`, `/data/system/packages.xml` (denied whole, target uids only) |
 
 Hard rules:
 
@@ -58,11 +59,12 @@ inside the detector's process, and the data is edited in the kernel.
 Two probes, neither of which reads a binder-internal structure:
 
 1. **`binder_transaction` (request side).** Runs in the caller's context, so
-   `current_uid()` is the target uid. When the parcel carries the
-   `android.content.pm.IPackageManager` interface token, the thread is marked
-   and package names in the request are renamed in place, same length. A
-   `getPackageInfo("hidden")` therefore reaches PMS as a request for a package
-   that does not exist, and PMS itself produces a genuine
+   `current_uid()` is the target uid. When the parcel carries one of the
+   system-service interface tokens (`IPackageManager`, `IActivityManager`,
+   `IActivityTaskManager`, `IUsageStatsManager`, `IAppOpsService`), the thread
+   is marked and package names in the request are renamed in place, same
+   length. A `getPackageInfo("hidden")` therefore reaches PMS as a request for
+   a package that does not exist, and PMS itself produces a genuine
    `NameNotFoundException`.
 2. **`binder_thread_read` (reply side).** Also runs in the caller's context. If
    the thread is marked and the read buffer contains `BR_REPLY`, the reply
@@ -85,10 +87,18 @@ Reply rewriting has two strategies, in order:
 `offsets_size != 0` (the parcel carries binder objects or file descriptors) is
 always passed through untouched.
 
-Which calls are covered: every `IPackageManager` transaction, both directions.
-That is intentionally *not* a table of AIDL transaction codes, which change per
-Android release; the interface token and the structure of the parcel are the
-selector instead.
+Which calls are covered: every transaction of the services above, both
+directions. That is intentionally *not* a table of AIDL transaction codes, which
+change per Android release; the interface token and the structure of the parcel
+are the selector instead.
+
+Package names show up in more than one shape: process names
+(`com.example.hidden:remote`), flattened component names
+(`com.example.hidden/.MainActivity`) and plain package names. The substitution
+matches the first two by prefix and rewrites only the package part, so the
+suffix - and therefore the string length - stays intact. The structural removal
+path stays exact-match only, because removing a *process* from a package list
+would be wrong.
 
 ## 3. L2 — self-hiding
 
