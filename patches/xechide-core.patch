@@ -757,10 +757,10 @@ index 0000000..e1d3abf
 +}
 diff --git a/new/kernel/xechide/xechide_core.c b/kernel/xechide/xechide_core.c
 new file mode 100644
-index 0000000..f29c186
+index 0000000..20a835e
 --- /dev/null
 +++ b/kernel/xechide/xechide_core.c
-@@ -0,0 +1,474 @@
+@@ -0,0 +1,472 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - kernel rule engine.
@@ -799,6 +799,12 @@ index 0000000..f29c186
 +
 +static atomic_t xechide_stats[XE_STAT_MAX];
 +
++/* Hot-path copies of two config facts, refreshed after every successful SET.
++ * READ_ONCE is enough: a stale value only costs one extra (or one missed)
++ * hook call until the next configuration update. */
++static unsigned int xe_n_rules;
++static bool xe_self_hide;
++
 +/*
 + * L0 self-hiding is cheap: instead of resolving a path for every file
 + * operation of every uid, the superblock of /data/adb is cached once and the
@@ -825,16 +831,7 @@ index 0000000..f29c186
 +
 +bool xechide_self_hide_enabled(void)
 +{
-+	const struct xechide_config *cfg;
-+	bool on = false;
-+
-+	if (!xechide_enabled)
-+		return false;
-+	rcu_read_lock();
-+	cfg = rcu_dereference(xechide_cfg);
-+	on = cfg && (cfg->flags & XECHIDE_CF_HIDE_SELF);
-+	rcu_read_unlock();
-+	return on;
++	return READ_ONCE(xe_self_hide);
 +}
 +
 +void xechide_stat_inc(int which)
@@ -868,7 +865,7 @@ index 0000000..f29c186
 +	bool hit = false;
 +	u32 i;
 +
-+	if (!xechide_enabled || uid_protected(uid))
++	if (!xechide_enabled || uid_protected(uid) || !READ_ONCE(xe_n_rules))
 +		return false;
 +
 +	rcu_read_lock();
@@ -951,7 +948,7 @@ index 0000000..f29c186
 +bool xechide_hide_path(u32 uid, const char *path)
 +{
 +	const struct xechide_config *cfg;
-+	bool hidden = false;
++	bool hidden = false, is_proc = false;
 +	u32 i;
 +
 +	if (!xechide_enabled || uid_protected(uid) || !path || path[0] != '/')
@@ -981,7 +978,7 @@ index 0000000..f29c186
 +			u32 owner = pid_uid(pid);
 +
 +			if (rule->hidden_uid && owner == rule->hidden_uid) {
-+				xechide_stat_inc(XE_STAT_PROC);
++				is_proc = true;
 +				hidden = true;
 +				break;
 +			}
@@ -990,7 +987,7 @@ index 0000000..f29c186
 +out:
 +	rcu_read_unlock();
 +	if (hidden)
-+		xechide_stat_inc(XE_STAT_PATH);
++		xechide_stat_inc(is_proc ? XE_STAT_PROC : XE_STAT_PATH);
 +	return hidden;
 +}
 +
@@ -1095,8 +1092,6 @@ index 0000000..f29c186
 +{
 +	u32 i;
 +
-+	if (!pkg[0])
-+		return false;
 +	for (i = 0; i < XECHIDE_PKG_LEN; i++) {
 +		unsigned char c = pkg[i];
 +
@@ -1122,7 +1117,6 @@ index 0000000..f29c186
 +	for (i = 0; i < cfg->n_rules; i++) {
 +		struct xechide_rule *rule = &cfg->rules[i];
 +
-+		rule->pkg[XECHIDE_PKG_LEN - 1] = 0;
 +		if (!pkg_valid(rule->pkg))
 +			return -EINVAL;
 +		if (rule->target_uid == 0 || rule->target_uid == 1000)
@@ -1157,6 +1151,8 @@ index 0000000..f29c186
 +	spin_lock(&xechide_cfg_lock);
 +	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
 +	rcu_assign_pointer(xechide_cfg, cfg);
++	WRITE_ONCE(xe_n_rules, cfg->n_rules);
++	WRITE_ONCE(xe_self_hide, (cfg->flags & XECHIDE_CF_HIDE_SELF) != 0);
 +	spin_unlock(&xechide_cfg_lock);
 +
 +	if (old) {
@@ -1225,6 +1221,8 @@ index 0000000..f29c186
 +	struct xechide_config *old;
 +
 +	xechide_enabled = false;
++	WRITE_ONCE(xe_n_rules, 0);
++	WRITE_ONCE(xe_self_hide, false);
 +	spin_lock(&xechide_cfg_lock);
 +	old = rcu_dereference_protected(xechide_cfg, lockdep_is_held(&xechide_cfg_lock));
 +	rcu_assign_pointer(xechide_cfg, NULL);
@@ -1237,10 +1235,10 @@ index 0000000..f29c186
 +}
 diff --git a/new/kernel/xechide/xechide_lsm.c b/kernel/xechide/xechide_lsm.c
 new file mode 100644
-index 0000000..6b3c1d9
+index 0000000..ad5d8bc
 --- /dev/null
 +++ b/kernel/xechide/xechide_lsm.c
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,432 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - L0 enforcement.
@@ -1386,7 +1384,8 @@ index 0000000..6b3c1d9
 +typedef int (*inode_permission_fn)(struct inode *inode, int mask);
 +
 +static int xe_inode_permission(struct inode *inode, int mask)
-+{	u32 uid = current_uid().val;
++{
++	u32 uid = current_uid().val;
 +	char buf[XE_PATH_MAX];
 +	struct dentry *d;
 +	int ret;
