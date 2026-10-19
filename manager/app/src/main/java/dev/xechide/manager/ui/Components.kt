@@ -47,7 +47,8 @@ fun ScreenHeader(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (onBack != null) {
-                TextButton(onClick = onBack) {
+                val back = onBack
+                TextButton(onClick = back) {
                     Text(stringResource(R.string.action_back))
                 }
             }
