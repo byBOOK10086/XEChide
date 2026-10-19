@@ -10,10 +10,12 @@
 #include <linux/atomic.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
+#include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/jiffies.h>
 #include <linux/kernel.h>
 #include <linux/lockdep.h>
+#include <linux/namei.h>
 #include <linux/pid.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
@@ -33,6 +35,44 @@ static struct xechide_config __rcu *xechide_cfg;
 static DEFINE_SPINLOCK(xechide_cfg_lock);
 
 static atomic_t xechide_stats[XE_STAT_MAX];
+
+/*
+ * L0 self-hiding is cheap: instead of resolving a path for every file
+ * operation of every uid, the superblock of /data/adb is cached once and the
+ * hooks only pay for it when the inode actually lives there. A stale pointer
+ * is only ever *compared*, never dereferenced.
+ */
+static struct super_block *xe_adb_sb;
+
+static void xechide_cache_adb_sb(void)
+{
+	struct path path;
+
+	if (xe_adb_sb || kern_path("/data/adb", LOOKUP_FOLLOW, &path))
+		return;
+	xe_adb_sb = path.dentry->d_sb;
+	path_put(&path);
+	pr_info("xechide: self-hide bound to /data/adb (sb %p)\n", xe_adb_sb);
+}
+
+bool xechide_on_adb_sb(const void *sb)
+{
+	return sb && xe_adb_sb && sb == xe_adb_sb;
+}
+
+bool xechide_self_hide_enabled(void)
+{
+	const struct xechide_config *cfg;
+	bool on = false;
+
+	if (!xechide_enabled)
+		return false;
+	rcu_read_lock();
+	cfg = rcu_dereference(xechide_cfg);
+	on = cfg && (cfg->flags & XECHIDE_CF_HIDE_SELF);
+	rcu_read_unlock();
+	return on;
+}
 
 void xechide_stat_inc(int which)
 {
@@ -154,15 +194,15 @@ bool xechide_hide_path(u32 uid, const char *path)
 	if (!xechide_enabled || uid_protected(uid) || !path || path[0] != '/')
 		return false;
 
-	if (is_self_path(path)) {
-		xechide_stat_inc(XE_STAT_PATH);
-		return true;
-	}
-
 	rcu_read_lock();
 	cfg = rcu_dereference(xechide_cfg);
 	if (!cfg)
 		goto out;
+
+	if ((cfg->flags & XECHIDE_CF_HIDE_SELF) && is_self_path(path)) {
+		hidden = true;
+		goto out;
+	}
 
 	for (i = 0; i < cfg->n_rules; i++) {
 		const struct xechide_rule *rule = &cfg->rules[i];
@@ -360,6 +400,7 @@ int xechide_ioctl_set(void __user *arg)
 		synchronize_rcu();
 		kfree(old);
 	}
+	xechide_cache_adb_sb();
 	pr_info("xechide: config updated, %u rule(s), flags 0x%x\n", cfg->n_rules, cfg->flags);
 	return 0;
 }
@@ -411,6 +452,7 @@ void xechide_get_stats(struct xechide_stats *out)
 int __init xechide_init(void)
 {
 	xechide_enabled = true;
+	xechide_cache_adb_sb();
 	pr_info("xechide: rule engine ready (%u max rules)\n", XECHIDE_MAX_RULES);
 	return 0;
 }
