@@ -8,11 +8,14 @@ before a detector ever sees them. Lower level than HMA-oss.
 > its own config format. It does not depend on, share code with, or ship inside
 > any other KernelSU fork or module.
 
-Status (2026-10): the kernel side is written and self-contained - one patch,
-L0 (four LSM entries + a readdir filter) and L1 (two binder probes), no per-KMI
-code, host tests for the pure matching/parcel code. The manager app and the
-root helper are the remaining pieces; nothing has been verified on a device
-yet, and the docs say so instead of pretending otherwise.
+Status (2026-10): kernel side done - one patch, L0 (four LSM entries + a
+readdir filter) and L1 (two binder probes), no per-KMI code; the pure matching
+and parcel code is compiled and unit-tested on the host by CI, and the patch is
+checked against the pinned stock KernelSU commit. The root helper (`ctl/`) and
+the manager app (`manager/`) are written and compile-checked where possible, but
+**nothing has been built against a real kernel or run on a device yet**. The
+docs say so instead of pretending otherwise; `docs/verification.md` is the
+checklist that has to pass before any claim gets stronger.
 
 ## Why another hiding tool
 
