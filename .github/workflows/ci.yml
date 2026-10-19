@@ -14,6 +14,20 @@ jobs:
       - name: Build and run
         run: make -C tests/host
 
+  ctl-build:
+    name: root helper compiles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compile
+        run: cc -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE -o "$RUNNER_TEMP/xechide-ctl" ctl/xechide-ctl.c
+
+      - name: Self-check
+        run: |
+          "$RUNNER_TEMP/xechide-ctl" version
+          "$RUNNER_TEMP/xechide-ctl" --help || test $? -eq 2
+
   patch-apply:
     name: patch applies to stock KernelSU
     runs-on: ubuntu-latest
