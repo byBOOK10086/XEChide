@@ -229,6 +229,8 @@ static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
 	return 0;
 }
 
+static bool xe_txn_registered;
+
 static struct kprobe xe_txn_kp = {
 	.symbol_name = "binder_transaction",
 	.pre_handler = xe_txn_pre,
@@ -362,6 +364,8 @@ static int xe_read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 	return 0;
 }
 
+static bool xe_read_registered;
+
 static struct kretprobe xe_read_rp = {
 	.kp.symbol_name = "binder_thread_read",
 	.entry_handler = xe_read_entry,
@@ -386,6 +390,7 @@ int xechide_binder_init(void)
 	if (ret) {
 		pr_warn("xechide: binder_transaction probe failed: %d\n", ret);
 	} else {
+		xe_txn_registered = true;
 		installed++;
 	}
 
@@ -393,6 +398,7 @@ int xechide_binder_init(void)
 	if (ret) {
 		pr_warn("xechide: binder_thread_read probe failed: %d\n", ret);
 	} else {
+		xe_read_registered = true;
 		installed++;
 	}
 
@@ -404,8 +410,14 @@ int xechide_binder_init(void)
 
 void xechide_binder_exit(void)
 {
-	unregister_kretprobe(&xe_read_rp);
-	unregister_kprobe(&xe_txn_kp);
+	if (xe_read_registered) {
+		unregister_kretprobe(&xe_read_rp);
+		xe_read_registered = false;
+	}
+	if (xe_txn_registered) {
+		unregister_kprobe(&xe_txn_kp);
+		xe_txn_registered = false;
+	}
 	vfree(xe_parcel_buf);
 	xe_parcel_buf = NULL;
 }
