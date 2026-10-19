@@ -77,6 +77,7 @@ fun AppPickerScreen(
             }
         }
     }
+    val pickerError = loadError
 
     Scaffold(
         topBar = {
@@ -88,7 +89,7 @@ fun AppPickerScreen(
                         onClick = {
                             onConfirm(apps.filter { app -> app.packageName in selected })
                         },
-                        enabled = !loading && loadError == null,
+                        enabled = !loading && pickerError == null,
                     ) {
                         Text(stringResource(R.string.action_done))
                     }
@@ -151,7 +152,7 @@ fun AppPickerScreen(
                     }
                 }
 
-                loadError != null -> {
+                pickerError != null -> {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -161,7 +162,7 @@ fun AppPickerScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         Text(
-                            text = loadError,
+                            text = pickerError.orEmpty(),
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -233,9 +234,10 @@ private fun AppPickerRow(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (app.icon != null) {
+        val icon = app.icon
+        if (icon != null) {
             Image(
-                bitmap = app.icon,
+                bitmap = icon,
                 contentDescription = null,
                 modifier = Modifier
                     .size(44.dp)
