@@ -149,7 +149,7 @@ static int xe_inode_permission(struct inode *inode, int mask)
 	struct dentry *d;
 	int ret;
 
-	if (!xechide_enabled || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
+	if (!xechide_enabled || !inode || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
 		goto orig;
 	if (!xe_active(uid, inode->i_sb))
 		goto orig;
@@ -353,6 +353,8 @@ static int xe_iter_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 	return 0;
 }
 
+static bool xe_iterate_registered;
+
 static struct kretprobe xe_iterate_rp = {
 	.kp.symbol_name = "iterate_dir",
 	.entry_handler = xe_iter_entry,
@@ -424,7 +426,10 @@ int xechide_lsm_init(void)
 
 void xechide_lsm_exit(void)
 {
-	unregister_kretprobe(&xe_iterate_rp);
+	if (xe_iterate_registered) {
+		unregister_kretprobe(&xe_iterate_rp);
+		xe_iterate_registered = false;
+	}
 	ksu_lsm_unhook(&xe_file_open_hook);
 	ksu_lsm_unhook(&xe_file_permission_hook);
 	ksu_lsm_unhook(&xe_inode_getattr_hook);
