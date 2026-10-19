@@ -340,10 +340,10 @@ index 0000000..967bfac
 +#endif /* _XECHIDE_H */
 diff --git a/new/kernel/xechide/xechide_binder.c b/kernel/xechide/xechide_binder.c
 new file mode 100644
-index 0000000..e1d3abf
+index 0000000..8992728
 --- /dev/null
 +++ b/kernel/xechide/xechide_binder.c
-@@ -0,0 +1,411 @@
+@@ -0,0 +1,446 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - L1 enforcement (binder).
@@ -351,10 +351,10 @@ index 0000000..e1d3abf
 + * Two probes, no binder-internal struct layout, no KMI-specific code:
 + *
 + *   binder_transaction (request) - current is the caller, so current_uid() is
-+ *                                  the target uid. If the parcel carries the
-+ *                                  PackageManager interface token, the thread
-+ *                                  is marked and hidden package names inside
-+ *                                  the request are renamed in place.
++ *                                  the target uid. If the parcel carries one of
++ *                                  the system-service interface tokens, the
++ *                                  thread is marked and hidden package names
++ *                                  inside the request are renamed in place.
 + *
 + *   binder_thread_read (reply)   - current is the caller again. If the thread
 + *                                  is marked and the buffer contains BR_REPLY,
@@ -515,6 +515,29 @@ index 0000000..e1d3abf
 +	return false;
 +}
 +
++/*
++ * System services whose parcels may carry a package name. The interface token
++ * is the first string of every AIDL request, so matching it costs one bounded
++ * scan and needs no transaction-number table.
++ */
++static const char *const xe_service_tokens[] = {
++	"android.content.pm.IPackageManager",
++	"android.app.IActivityManager",
++	"android.app.IActivityTaskManager",
++	"android.app.usage.IUsageStatsManager",
++	"com.android.internal.app.IAppOpsService",
++};
++
++static bool parcel_names_service(const unsigned char *buf, unsigned int len)
++{
++	int i;
++
++	for (i = 0; i < (int)ARRAY_SIZE(xe_service_tokens); i++)
++		if (parcel_has_token(buf, len, xe_service_tokens[i]))
++			return true;
++	return false;
++}
++
 +/* --------------------------------------------------------- request probe --- */
 +
 +static int xe_txn_pre(struct kprobe *p, struct pt_regs *regs)
@@ -551,7 +574,7 @@ index 0000000..e1d3abf
 +			spin_unlock_irqrestore(&xe_buf_lock, flags);
 +			return 0;
 +		}
-+		if (!parcel_has_token(xe_parcel_buf, head, "android.content.pm.IPackageManager")) {
++		if (!parcel_names_service(xe_parcel_buf, head)) {
 +			spin_unlock_irqrestore(&xe_buf_lock, flags);
 +			return 0;
 +		}
@@ -574,6 +597,8 @@ index 0000000..e1d3abf
 +	mark_add(task_pid_nr(current), uid);
 +	return 0;
 +}
++
++static bool xe_txn_registered;
 +
 +static struct kprobe xe_txn_kp = {
 +	.symbol_name = "binder_transaction",
@@ -708,6 +733,8 @@ index 0000000..e1d3abf
 +	return 0;
 +}
 +
++static bool xe_read_registered;
++
 +static struct kretprobe xe_read_rp = {
 +	.kp.symbol_name = "binder_thread_read",
 +	.entry_handler = xe_read_entry,
@@ -732,6 +759,7 @@ index 0000000..e1d3abf
 +	if (ret) {
 +		pr_warn("xechide: binder_transaction probe failed: %d\n", ret);
 +	} else {
++		xe_txn_registered = true;
 +		installed++;
 +	}
 +
@@ -739,6 +767,7 @@ index 0000000..e1d3abf
 +	if (ret) {
 +		pr_warn("xechide: binder_thread_read probe failed: %d\n", ret);
 +	} else {
++		xe_read_registered = true;
 +		installed++;
 +	}
 +
@@ -750,8 +779,14 @@ index 0000000..e1d3abf
 +
 +void xechide_binder_exit(void)
 +{
-+	unregister_kretprobe(&xe_read_rp);
-+	unregister_kprobe(&xe_txn_kp);
++	if (xe_read_registered) {
++		unregister_kretprobe(&xe_read_rp);
++		xe_read_registered = false;
++	}
++	if (xe_txn_registered) {
++		unregister_kprobe(&xe_txn_kp);
++		xe_txn_registered = false;
++	}
 +	vfree(xe_parcel_buf);
 +	xe_parcel_buf = NULL;
 +}
@@ -1235,10 +1270,10 @@ index 0000000..20a835e
 +}
 diff --git a/new/kernel/xechide/xechide_lsm.c b/kernel/xechide/xechide_lsm.c
 new file mode 100644
-index 0000000..ad5d8bc
+index 0000000..5c22756
 --- /dev/null
 +++ b/kernel/xechide/xechide_lsm.c
-@@ -0,0 +1,432 @@
+@@ -0,0 +1,437 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - L0 enforcement.
@@ -1390,7 +1425,7 @@ index 0000000..ad5d8bc
 +	struct dentry *d;
 +	int ret;
 +
-+	if (!xechide_enabled || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
++	if (!xechide_enabled || !inode || !(mask & (MAY_READ | MAY_EXEC | MAY_ACCESS)))
 +		goto orig;
 +	if (!xe_active(uid, inode->i_sb))
 +		goto orig;
@@ -1594,6 +1629,8 @@ index 0000000..ad5d8bc
 +	return 0;
 +}
 +
++static bool xe_iterate_registered;
++
 +static struct kretprobe xe_iterate_rp = {
 +	.kp.symbol_name = "iterate_dir",
 +	.entry_handler = xe_iter_entry,
@@ -1665,7 +1702,10 @@ index 0000000..ad5d8bc
 +
 +void xechide_lsm_exit(void)
 +{
-+	unregister_kretprobe(&xe_iterate_rp);
++	if (xe_iterate_registered) {
++		unregister_kretprobe(&xe_iterate_rp);
++		xe_iterate_registered = false;
++	}
 +	ksu_lsm_unhook(&xe_file_open_hook);
 +	ksu_lsm_unhook(&xe_file_permission_hook);
 +	ksu_lsm_unhook(&xe_inode_getattr_hook);
@@ -1673,10 +1713,10 @@ index 0000000..ad5d8bc
 +}
 diff --git a/new/kernel/xechide/xechide_match.c b/kernel/xechide/xechide_match.c
 new file mode 100644
-index 0000000..f119eec
+index 0000000..3b9bae9
 --- /dev/null
 +++ b/kernel/xechide/xechide_match.c
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,179 @@
 +﻿/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - pure path/name matching. No kernel API is used here so the same
@@ -1815,6 +1855,16 @@ index 0000000..f119eec
 +	if (!(rule->flags & XECHIDE_RF_PATHS))
 +		return false;
 +
++	/*
++	 * The package database itself. Denying the whole file is the only
++	 * scalable option, and only target uids ever reach this function; the
++	 * entry is here so a detector that can read packages.list (shell) cannot
++	 * bypass the binder filter by parsing the file.
++	 */
++	if (!strcmp(path, "/data/system/packages.list") ||
++	    !strcmp(path, "/data/system/packages.xml"))
++		return true;
++
 +	if (match_apk_dir(path, pkg))
 +		return true;
 +	if (component_prefix(path, "/data/data/", pkg))
@@ -1848,10 +1898,10 @@ index 0000000..f119eec
 +}
 diff --git a/new/kernel/xechide/xechide_parcel.c b/kernel/xechide/xechide_parcel.c
 new file mode 100644
-index 0000000..db156e7
+index 0000000..7e3454d
 --- /dev/null
 +++ b/kernel/xechide/xechide_parcel.c
-@@ -0,0 +1,500 @@
+@@ -0,0 +1,562 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * XEChide - binder parcel rewriting.
@@ -2011,6 +2061,66 @@ index 0000000..db156e7
 +		if (ok && zeros(buf + off + 4 + n, total - 4 - n)) {
 +			*enc = 8;
 +			return total;
++		}
++	}
++	return 0;
++}
++
++
++/*
++ * Component-style match: the parcel string starts with @name and continues with
++ * ':' (process name, e.g. "com.example.hidden:remote") or '/' (flattened
++ * ComponentName, e.g. "com.example.hidden/.Main"). Only the package part is
++ * renamed, the suffix is left untouched, so the string keeps its length.
++ */
++static unsigned int str_component_at(const unsigned char *buf, unsigned int len, unsigned int off,
++				     const struct xe_name *name, int *enc)
++{
++	unsigned int n = name->len, slen, total, i;
++
++	if (off > len || len - off < 4)
++		return 0;
++	slen = rd32(buf + off);
++	if (slen <= n || slen > XE_MAX_NAME_LEN)
++		return 0;
++
++	total = str16_total(slen);
++	if (off + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < n; i++) {
++			if (buf[off + 4 + 2 * i] != (unsigned char)name->p[i] || buf[off + 5 + 2 * i] != 0) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok && buf[off + 5 + 2 * n] == 0) {
++			unsigned char sep = buf[off + 4 + 2 * n];
++
++			if (sep == ':' || sep == '/') {
++				*enc = 16;
++				return total;
++			}
++		}
++	}
++
++	total = str8_total(slen);
++	if (off + total <= len) {
++		bool ok = true;
++
++		for (i = 0; i < n; i++) {
++			if (buf[off + 4 + i] != (unsigned char)name->p[i]) {
++				ok = false;
++				break;
++			}
++		}
++		if (ok) {
++			unsigned char sep = buf[off + 4 + n];
++
++			if (sep == ':' || sep == '/') {
++				*enc = 8;
++				return total;
++			}
 +		}
 +	}
 +	return 0;
@@ -2287,9 +2397,11 @@ index 0000000..db156e7
 +			int enc = 0;
 +			unsigned int total, k2;
 +
-+			if (rds32(buf + off) != (int)n)
++			if (rds32(buf + off) < (int)n)
 +				continue;
 +			total = str_match_at(buf, len, off, &names[i], &enc);
++			if (!total)
++				total = str_component_at(buf, len, off, &names[i], &enc);
 +			if (!total)
 +				continue;
 +			for (k2 = 0; k2 < n; k2++) {
