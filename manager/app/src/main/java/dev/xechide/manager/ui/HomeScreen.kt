@@ -38,6 +38,7 @@ import dev.xechide.manager.data.ManagerConfig
 import dev.xechide.manager.data.XECHIDE_MAX_RULES
 import dev.xechide.manager.data.resolveRules
 import dev.xechide.manager.root.HelperState
+import dev.xechide.manager.root.XeChideBridge
 import java.text.DateFormat
 import java.util.Date
 
@@ -45,6 +46,7 @@ import java.util.Date
 fun HomeScreen(
     config: ManagerConfig,
     helperState: HelperState,
+    deviceStatus: XeChideBridge.DeviceStatus?,
     lastApply: ApplyRecord?,
     busyLabel: String?,
     snackbarHostState: SnackbarHostState,
@@ -83,6 +85,7 @@ fun HomeScreen(
                 ruleCount = ruleCount,
                 overLimit = overLimit,
                 helperState = helperState,
+                deviceStatus = deviceStatus,
                 lastApply = lastApply,
             )
 
@@ -223,8 +226,32 @@ private fun StatusCard(
     ruleCount: Int,
     overLimit: Boolean,
     helperState: HelperState,
+    deviceStatus: XeChideBridge.DeviceStatus?,
     lastApply: ApplyRecord?,
 ) {
+    val moduleLabel = when {
+        deviceStatus == null -> stringResource(R.string.status_checking)
+        deviceStatus.moduleActive -> stringResource(
+            R.string.status_module_installed,
+            deviceStatus.version ?: "",
+        )
+        else -> stringResource(R.string.status_module_missing)
+    }
+    val moduleColor = when {
+        deviceStatus == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        deviceStatus.moduleActive -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.error
+    }
+    val kernelLabel = if (deviceStatus?.kernelDriver == true) {
+        stringResource(R.string.status_kernel_present)
+    } else {
+        stringResource(R.string.status_kernel_absent)
+    }
+    val kernelColor = if (deviceStatus?.kernelDriver == true) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
     val helperLabel = when (helperState) {
         HelperState.CHECKING -> stringResource(R.string.helper_state_checking)
         HelperState.INSTALLED -> stringResource(R.string.helper_state_installed)
@@ -261,6 +288,22 @@ private fun StatusCard(
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 },
+            )
+            StatusRow(
+                label = stringResource(R.string.status_module_label),
+                value = moduleLabel,
+                valueColor = moduleColor,
+            )
+            StatusRow(
+                label = stringResource(R.string.status_kernel_label),
+                value = kernelLabel,
+                valueColor = kernelColor,
+            )
+
+            Text(
+                text = stringResource(R.string.module_status_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
             if (helperState == HelperState.MISSING) {
