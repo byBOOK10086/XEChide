@@ -1,48 +1,96 @@
 # XEChide — threat model & limits
 
+XEChide ships two enforcement forms with the same configuration: the **module**
+form (native Zygisk, userspace) and the **kernel** form (patched KernelSU).
+Their detection surfaces are different; this document says which is which.
+
 ## Who we defend against
 
-| Adversary | Capability | XEChide answer |
-|---|---|---|
-| Ordinary detector app | `getInstalledPackages`, `queryIntent*`, direct file reads, `/proc` scan | L1 + L0 + L0(`/proc`) |
-| Detector with shell (`adb shell`, Shizuku) | uid 2000, `pm list packages`, `ls /data/app` | the same rules apply to uid 2000 — add it as a target |
-| Detector that inspects its own process | `maps`, ART headers, JNI tables | nothing to find: no injection |
-| Root scanner (`su -c`, kernel module) | reads kernel memory, `/proc/kallsyms` | **out of scope — assume loss** |
-| Forensic image of `/data` | offline | config is encrypted; the list is in RAM only while running |
+| Adversary | Capability | Module form | Kernel form |
+|---|---|---|---|
+| Ordinary detector app | `getInstalledPackages`, `queryIntent*`, direct file access | binder parcels filtered before Java; `libjavacore` paths answer `ENOENT` | kernel filters replies and path lookups |
+| Detector that inspects **its own** process | `maps`, ELF/dynsym scan, GOT check, memory scan | **can find** the injected image / a patched GOT entry | **nothing to find**: no code in the process |
+| Detector with shell (`adb shell`, Shizuku) | uid 2000, `pm list packages`, `ls /data/app` | not injected into shell, so not covered | uid 2000 is just another target |
+| Root scanner (`su -c`) | kernel memory, `/proc/kallsyms`, `/data/adb` | out of scope; root sees the module/config | out of scope; root sees the kernel hooks |
+| Forensic image of `/data` | offline | config is root-only, plaintext at rest (see below) | config is kernel RAM only |
+
+The module form is a **userspace injection** by definition. It reduces what a
+Java-level detector sees, and it covers native binder and file access that HMA's
+Java hooks miss, but it cannot win the "inspect my own address space" game. If
+that is the threat you care about, use the kernel form.
 
 ## What is deliberately NOT hidden
 
-1. Packages installed **after** the rule was applied — their install broadcast
-   has already gone out. Apply first.
-2. Notifications posted by the hidden app (system_server posts them).
-3. `dumpsys`-style output. `dumpsys` passes a file descriptor and
-   `system_server` writes the dump into it directly; that stream never becomes a
-   binder parcel, so the L1 filter does not see it (this includes
-   `dumpsys package` and `cmd activity`). Covering it would need a read-side
-   content redactor, which is a different (and much heavier) mechanism.
-4. `Play Integrity` verdicts and anything server-side.
-5. Files the hidden app writes into shared storage (`/sdcard/Download/...`) —
-   only `/data/media/*/Android/data/<pkg>` is hidden.
-6. The hidden app's **network** activity (no hooking of sockets).
+1. Packages installed **after** the config was applied (module processes fetch
+   the config at start, kernel rules are static until reapplied).
+2. The hidden app's **notifications** (posted by system_server) and its network
+   traffic.
+3. `dumpsys` output: it writes to a file descriptor, not a binder reply. Neither
+   form covers it.
+4. Play Integrity verdicts and anything server-side.
+5. Files the hidden app writes into shared storage outside
+   `Android/{data,media,obb}`.
+6. In the **module** form: direct syscalls (`syscall(SYS_openat)`) and file
+   access from native libraries loaded **after** Zygisk's pre-specialization
+   commit. The hooks live in `libjavacore.so` / `libbinder.so`; app-owned native
+   libraries are not patched.
+7. In the **module** form: the config file is plaintext at rest
+   (`/data/adb/xechide/config`, 0600 root). The kernel form keeps rules in kernel
+   memory only. Root can read either.
 
 ## Fail-safe rules (enforced in code review)
 
-- No deny for uid 1000 (system), 0 (root), or the init domain.
-- Reads only: never block writes, `chmod`, `unlink`.
-- Unknown binder transaction → pass through, log once.
-- Any bounds check failure → pass through.
-- The kernel never allocates unbounded memory from userspace input.
+- Kernel form: no deny for uid 0 / 1000; reads only; unknown binder transaction
+  or failed bounds check → pass through.
+- Module form: no config or no rule for this uid → no hooks are installed at
+  all; a missing symbol, a failed commit, an unparsable parcel or a missing
+  backup pointer → the original function runs unchanged; a failed file write
+  never deletes the previous config.
+- Parcel rewriting stays conservative: restructure only when the element count
+  and boundaries validate, otherwise rename in place with an identical length.
 
-## Detection surface that remains
+## Module-form detection surface that remains
 
-- **Timing**: a filtered `getInstalledPackages` is slightly slower than an
-  unfiltered one (parcel walk). Within noise for a 3 KB parcel, measured in
-  `docs/verification.md`.
-- **Inconsistency**: `getPackageInfo(hidden)` returns null while
-  `getPackagesForUid(uid_of_hidden)` would also be filtered — but a detector can
-  still call `getInstalledPackages` with flags not covered by the filter. Every
-  added code is an arms race; the audit log in `dmesg` shows which codes the
-  device actually uses.
-- **Procfs**: `/proc/<hidden_pid>/` is hidden only for target uids; a target
-  that reads `/proc` via `openat2`/`statx` on an unlisted path may still see the
-  pid until the dentry cache is invalidated (`docs/verification.md` §3).
+- **`maps`**: the module image is loaded from a `memfd` named `jit-cache`
+  (Magisk's own naming, not ours). We filter reads of `/proc/self/maps`,
+  `/proc/self/smaps` and `map_files`, but a detector issuing raw syscalls or
+  reading its own memory can still find an anonymous executable mapping.
+- **GOT**: `libbinder`'s `ioctl` and `libjavacore`'s file functions have replaced
+  GOT entries. Reading those tables inside the detector's own process exposes
+  the hook; there is no way around this in userspace.
+- **Memory**: the hook code and the per-process rule names are readable by the
+  process itself.
+- **Direct syscalls**: `syscall(SYS_openat, ...)` bypasses the PLT hooks.
+- **Zygisk/root itself**: `zygiskd64`, the native-bridge property, Magisk or
+  Zygisk Next presence — these belong to the root solution, not to XEChide.
+
+Mitigations that are implemented: config never enters the app's filesystem view;
+`/data/adb` paths are hidden; the two public Zygisk export names are erased from
+`.dynstr` after load; `maps`/`smaps` are filtered; no logs or debug strings are
+emitted in release; the module is loaded by Zygisk from memfd, so no
+`/data/adb/modules/...` path appears in the target's mappings.
+
+## SELinux
+
+- **Module form**: no policy changes. The app process never reads
+  `/data/adb/xechide`; the root companion reads it and passes bytes over the
+  Zygisk companion socket (created while the process still runs with zygote
+  privileges). File hooks return **forged `ENOENT`**, so they do not generate
+  `avc: denied` records; they only make an already-denied path quieter.
+- **Kernel form**: the LSM wrappers call the original SELinux handler first and
+  only add `-ENOENT` after SELinux has allowed the operation. SELinux is never
+  weakened (that would be a privilege-escalation bug), the L2 self-hide rule is
+  a VFS-level `ENOENT` and does not alter xattrs or policy. Because the deny is
+  added after the SELinux decision, no extra `avc` noise is produced. The real
+  risk in this form is kernel-version coupling (`security_hook_heads`, RCU
+  lifetime) and binder parcel correctness, not SELinux policy.
+
+## Root-level traces
+
+- Module form: `/data/adb/modules/xechide/`, `/data/adb/xechide/`, the memfd
+  mapping, the companion socket; ordinary apps cannot read `/data/adb`
+  (`adb_data_file`, root/shell only), so these are root/forensic traces.
+- Kernel form: function names in `/proc/kallsyms` on `KALLSYMS_ALL` kernels,
+  replaced LSM slots and kprobe entries (debugfs), all root-only. Symbol-name
+  scrubbing remains on the hardening list; no kernel log lines are emitted in
+  release builds.
