@@ -3,10 +3,18 @@
     <string name="app_name">XEChide Manager</string>
 
     <!-- Home -->
-    <string name="home_subtitle">内核级应用隐藏</string>
+    <string name="home_subtitle">应用隐藏 · 模块 / 内核</string>
     <string name="status_title">运行状态</string>
     <string name="status_helper_label">Root helper</string>
     <string name="status_rules_label">规则数量</string>
+    <string name="status_module_label">模块端（Zygisk）</string>
+    <string name="status_kernel_label">内核端</string>
+    <string name="status_module_installed">已安装 %1$s</string>
+    <string name="status_module_missing">未安装（刷入 module zip + Zygisk）</string>
+    <string name="status_kernel_present">驱动已连接</string>
+    <string name="status_kernel_absent">未检测到（备用方案）</string>
+    <string name="status_checking">检测中…</string>
+    <string name="module_status_hint">模块端：刷入 XEChide module zip，并在 Zygisk / Zygisk Next 中启用；修改规则后需重启目标应用。内核端为可选进阶形态，驱动可用时 apply 会同时写入内核。</string>
     <string name="rules_count">%1$d / %2$d 条</string>
     <string name="status_last_result_label">上次应用</string>
     <string name="last_never_applied">尚未应用</string>
@@ -36,11 +44,11 @@
     <string name="target_missing_warning">已关闭“对所有非 root 应用生效”，请至少选择一个目标应用。</string>
     <string name="apply_config">应用配置</string>
     <string name="install_helper">安装/更新 helper</string>
-    <string name="view_stats">查看内核统计</string>
-    <string name="busy_apply">正在向内核应用配置…</string>
+    <string name="view_stats">查看内核统计（仅内核端）</string>
+    <string name="busy_apply">正在写入模块配置并同步内核…</string>
     <string name="busy_install">正在安装/更新 helper…</string>
 
-    <string name="home_footer">配置在应用私有目录中由 Android Keystore 加密保存，并在开机时由 BOOT_COMPLETED 接收器重新应用。需要已刷入带 XEChide 补丁的 KernelSU 内核。helper 状态只检查文件可执行，不验证内核补丁是否加载。</string>
+    <string name="home_footer">同一份配置同时驱动两种形态：模块端（Zygisk / Zygisk Next，推荐）和内核端（带 XEChide 补丁的 KernelSU，可选）。配置在应用私有目录中由 Android Keystore 加密保存，并在开机时重新应用；模块端改规则后需要重启目标应用。helper 状态只检查文件可执行，不验证模块或内核补丁是否加载。</string>
 
     <!-- Validation / operation results -->
     <string name="error_no_hidden">请至少选择一个要隐藏的应用。</string>
@@ -50,10 +58,10 @@
     <string name="error_operation">操作失败：%1$s</string>
     <string name="snack_apply_success">配置已应用：%1$d 条规则。</string>
     <string name="snack_apply_failed">应用失败（退出码 %1$d），详情见状态卡片。</string>
-    <string name="error_save_config">已应用到内核，但配置保存失败：%1$s</string>
+    <string name="error_save_config">已应用配置，但保存失败：%1$s</string>
 
     <!-- Helper installation -->
-    <string name="helper_asset_missing">APK 内缺少 assets/xechide-ctl-arm64。正式发布 APK 会内置该二进制；请按 manager/README.md 使用 NDK 从 ctl/ 构建，把它放入 app/src/main/assets/ 后重新打包。</string>
+    <string name="helper_asset_missing">APK 内缺少 assets/xechide-ctl-arm64。正式发布 APK 会内置该二进制；可在本地用 Zig 或 NDK 从 ctl/ 构建，放入 app/src/main/assets/ 后重新打包。</string>
     <string name="helper_asset_read_failed">无法读取 assets/xechide-ctl-arm64：%1$s</string>
     <string name="helper_asset_empty">assets/xechide-ctl-arm64 是空文件。</string>
     <string name="helper_install_success">helper 已安装，并通过 test -x 校验。</string>
