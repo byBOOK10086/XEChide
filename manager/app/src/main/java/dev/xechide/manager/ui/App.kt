@@ -59,6 +59,7 @@ fun ManagerApp() {
     var appsError by remember { mutableStateOf<String?>(null) }
     var appsRequest by remember { mutableStateOf(0) }
     var helperState by remember { mutableStateOf(HelperState.CHECKING) }
+    var deviceStatus by remember { mutableStateOf<XeChideBridge.DeviceStatus?>(null) }
     var lastApply by remember { mutableStateOf<ApplyRecord?>(null) }
     var busy by remember { mutableStateOf<BusyKind?>(null) }
 
@@ -112,6 +113,13 @@ fun ManagerApp() {
             throw error
         } catch (_: Exception) {
             HelperState.UNKNOWN
+        }
+        deviceStatus = try {
+            XeChideBridge.status()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -182,6 +190,13 @@ fun ManagerApp() {
 
                 if (outcome.success) {
                     helperState = HelperState.INSTALLED
+                    deviceStatus = try {
+                        XeChideBridge.status()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        deviceStatus
+                    }
                     val persistenceError = saveFailure
                     if (persistenceError == null) {
                         showMessage(
@@ -252,6 +267,7 @@ fun ManagerApp() {
             HomeScreen(
                 config = config,
                 helperState = helperState,
+                deviceStatus = deviceStatus,
                 lastApply = lastApply,
                 busyLabel = busyLabel,
                 snackbarHostState = snackbarHostState,
