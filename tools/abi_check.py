@@ -166,6 +166,28 @@ def main() -> int:
           "manager and kernel accept the same package-name characters",
           "%r vs %r" % (sorted(kernel_chars), sorted(manager_chars)))
 
+    print("== module form")
+    module_prop = read("module/module.prop")
+    module_hdr = read("module/src/xechide_mod.h")
+    module_src = read("module/src/xechide_util.cpp")
+    module_api = read("module/src/zygisk_api.h")
+    module_build = read("module/build.sh")
+    check("id=xechide" in module_prop, "module.prop id is xechide")
+    check(re.search(r"^version=v", module_prop, re.M) is not None and
+          re.search(r"^versionCode=\d+", module_prop, re.M) is not None,
+          "module.prop has version and versionCode")
+    check('"/data/adb/xechide/config"' in module_hdr and "/data/adb/xechide/config" in helper,
+          "module and helper agree on the config path")
+    check("XE_PROTO_GET_CONFIG" in module_hdr and "connectCompanion" in module_api,
+          "module fetches its config through the Zygisk companion")
+    check("kernel/xechide_parcel.c" in module_build and "kernel/xechide_match.c" in module_build,
+          "module reuses the shared parcel/matching sources")
+    check("pltHookRegister" in module_api and "pltHookCommit" in module_api and
+          "exemptFd" in module_api,
+          "module ABI is Zygisk API v4+ (PLT hooks by dev/inode)")
+    check("XE_PROTO_MAGIC" in module_hdr and "xe_read_full" in module_src,
+          "companion protocol is length-checked")
+
     print()
     print("%d checks, %d failure(s)" % (checks, failures))
     return 1 if failures else 0
