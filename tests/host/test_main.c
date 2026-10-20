@@ -120,6 +120,12 @@ static void test_match(void)
 		"/sdcard/Android/data/com.example.hidden",
 		"/data/system/packages.list",
 		"/data/system/packages.xml",
+		"/data/system/appops.xml",
+		"/data/system/notification_policy.xml",
+		"/data/system/usagestats/0/daily/abc.bin",
+		"/data/system/job/jobs.xml",
+		"/data/system/shortcut_service/shortcuts.xml",
+		"/data/system/users/0/package-restrictions.xml",
 	};
 	static const char *const no[] = {
 		"/data/app/~~aB12==/com.example.hidden2-Xy/base.apk",
@@ -132,6 +138,9 @@ static void test_match(void)
 		"/storage/emulated/0/Android/data/com.example.hidden2",
 		"/system/app/com.example.hidden/base.apk",
 		"/data/system/packages.list.bak",
+		"/data/system/jobs.xml",
+		"/data/system/users/0/other.xml",
+		"/data/system/usagestats2/0/x",
 		"/proc/1234",
 		"",
 	};
