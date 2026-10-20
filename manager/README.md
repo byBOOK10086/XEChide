@@ -13,10 +13,11 @@ fork.
 > release build must bundle the helper.
 
 The app **compiles**: a debug APK was built on 2026-10-20 with JDK 17,
-Gradle 8.9, AGP 8.7.3 and compileSdk 35, with the helper bundled. It has not
-been run on a physical device, the helper has not been executed, and the kernel
-patch has not been compiled. Do not treat any screen as proof that the kernel
-patch is active.
+Gradle 8.9, AGP 8.7.3 and compileSdk 35, with the helper bundled (`apply`
+writes the module config and the kernel ioctl when its driver exists). It has
+not been run on a physical device, the helper has not been executed, and the
+Zygisk module has not been loaded by a real Zygisk. Do not treat any screen as
+proof that either enforcement form is active.
 
 ## What it does
 
@@ -26,12 +27,15 @@ patch is active.
    - target apps, or "all non-root apps";
    - hiding from uid 2000, and self-path hiding.
 3. Serializes a 8976-byte, little-endian `struct xechide_config` and pipes it
-   to `su -c '/data/adb/xechide/bin/xechide-ctl set'`.
+   to `su -c '/data/adb/xechide/bin/xechide-ctl apply'`. `apply` atomically
+   writes `/data/adb/xechide/config` (module form) and, if a patched KernelSU
+   driver is present, sends the same bytes with the SET ioctl (kernel form).
 4. Encrypts the same selection as JSON (AES-256-GCM, Android Keystore) in the
    app's private SharedPreferences.
 5. Re-applies the saved selection from a `BOOT_COMPLETED` receiver.
 6. Installs/updates the helper from APK assets and verifies it with `test -x`.
-7. Shows the output of `xechide-ctl stats`.
+7. Shows the module/kernel presence returned by `xechide-ctl status`, and the
+   kernel counters from `xechide-ctl stats`.
 
 There is no JNI, no `libsu`, no `security-crypto`, and no daemon. Root commands
 use `ProcessBuilder("su", "-c", ...)` from `Dispatchers.IO`, with a hard
@@ -49,7 +53,7 @@ The versions are pinned in `build.gradle.kts` / `app/build.gradle.kts`:
 | Compose BOM | 2024.09.03 |
 | JDK | 17 |
 | Android SDK | API 35 (`compileSdk = 35`) |
-| NDK (only for the helper) | any current r26/r27; the helper is plain C |
+| Helper toolchain | Zig 0.15.x (`aarch64-linux-musl`, no NDK needed) |
 
 A Gradle wrapper is intentionally not committed in this source tree. Open the
 `manager/` directory in Android Studio (Ladybug or newer) and let it use a
@@ -65,24 +69,19 @@ Maven mirror is configured.
 
 ### Produce and bundle the helper (required)
 
-From the repository root:
+From the repository root, with Zig 0.15.x on `PATH` (or `ZIG=/path/to/zig`):
 
 ```sh
-cmake -S ctl -B build-ctl \
-  -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-  -DANDROID_ABI=arm64-v8a \
-  -DANDROID_PLATFORM=android-30 \
-  -DCMAKE_BUILD_TYPE=Release
-
-cmake --build build-ctl --target xechide-ctl
-
-cp build-ctl/xechide-ctl manager/app/src/main/assets/xechide-ctl-arm64
+ZIG=/path/to/zig "$ZIG" cc -target aarch64-linux-musl -static \
+  -std=c11 -Wall -Wextra -Werror -D_GNU_SOURCE \
+  -o manager/app/src/main/assets/xechide-ctl-arm64 ctl/xechide-ctl.c
 chmod 0755 manager/app/src/main/assets/xechide-ctl-arm64
 ```
 
-Then build the APK. `app/src/main/assets/README.md` has the same instructions
-plus the APK check. The asset must be an `arm64-v8a` Android ELF; the host
-binary produced by the CI sanity check will not run on the phone.
+The `build-apk` GitHub workflow does exactly this and then builds the module
+zip, so a release artifact contains both the helper and the module. The asset
+is `.gitignore`d: it is a build product, not source. `app/src/main/assets/README.md`
+has the same instructions plus the APK check.
 
 Without the asset the **Install/update helper** button reports:
 
