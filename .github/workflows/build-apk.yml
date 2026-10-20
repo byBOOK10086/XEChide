@@ -31,6 +31,9 @@ jobs:
           file manager/app/src/main/assets/xechide-ctl-arm64
           sha256sum manager/app/src/main/assets/xechide-ctl-arm64
 
+      - name: Build the Zygisk module zip
+        run: ZIG="$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" bash module/build.sh
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -48,7 +51,8 @@ jobs:
         run: |
           mkdir -p out
           cp manager/app/build/outputs/apk/debug/app-debug.apk out/xechide-manager-debug.apk
-          sha256sum out/xechide-manager-debug.apk | tee out/SHA256SUMS
+          cp module/out/*.zip out/
+          sha256sum out/* | tee out/SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
