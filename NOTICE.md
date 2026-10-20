@@ -22,13 +22,16 @@ attributed below.
 - **KernelSU** (`tiann/KernelSU`, GPL-3.0) — the supercall dispatch table and the
   "only the authenticated manager may call" permission flag. XEChide's ioctls
   are new numbers in a reserved range; no KernelSU source is copied here.
+- **Zygisk** (part of Magisk, GPL-3.0) — the module form runs as a Zygisk
+  module. The ABI structs in `module/src/zygisk_api.h` were written from the
+  published interface documentation; no Magisk or Zygisk source is copied or
+  vendored. The module uses the loader's public `pltHookRegister` API.
 
 ## No third-party code was copied
 
 - **HMA-oss** (Hide My Apps): compared against in `docs/comparison-hma.md` from
   public documentation only — no code, assets or resource files were taken.
-- **LSPosed / Shizuku / Zygisk**: rejected by design (userspace injection); not
-  vendored.
+- **LSPosed / Shizuku**: Java hook frameworks rejected by design; not vendored.
 - **TrickyStore** (ships without a licence) and **OhMyKeymint** (AGPL-3.0): not
   used, not referenced.
 
