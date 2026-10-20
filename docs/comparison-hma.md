@@ -2,45 +2,48 @@
 
 ## The short version
 
-HMA-oss is a **userspace app that hooks other apps' processes** (Xposed/LSPosed
-or an in-process injection) and rewrites what the framework returns. XEChide is
-a **kernel feature** of KernelSU: it changes nothing in any app's process and
-filters the data before the app can see it.
+HMA-oss is a **Java Xposed module**: LSPosed injects it into the detector's
+process and it hooks `PackageManager` methods. XEChide's module form is a
+**native Zygisk module** with no LSPosed dependency: it hooks the PLT of
+`libbinder.so` and `libjavacore.so` and filters the data at the binder and
+filesystem boundary. XEChide's kernel form moves the same decisions into the
+kernel and injects nothing at all.
 
 ## Layer by layer
 
-| Question | HMA-oss | XEChide |
-|---|---|---|
-| How is a package hidden from `getInstalledPackages`? | Java hook on `PackageManagerService` (or the app's `ApplicationPackageManager`), returns a filtered list | the kernel rewrites the **binder reply parcel** of the target's own call (L1) |
-| How is a direct query hidden (`getPackageInfo`, `getApplicationInfo`)? | the same Java hook | the kernel renames the package inside the **request** parcel, so PMS itself answers "not found" (L1) |
-| How is the app's directory hidden? | usually not at all; some versions hide the launcher entry | LSM denies **target → /data/app/<pkg>**, and the readdir filter drops the entry (L0) |
-| How are process/task lists hidden? | usually out of scope for the module | the same parcel filter covers `IActivityManager`, `IActivityTaskManager`, `IUsageStatsManager`, `IAppOpsService`, including `pkg:remote` process names (L1) |
-| How is the package database protected? | file is untouched | `/data/system/packages.list` and `packages.xml` are denied for target uids, so parsing the database cannot bypass the binder filter (L0) |
-| What does the target's process contain? | the hook framework, the Xposed module, a modified ART method | **nothing** |
-| Can the target detect it from inside? | yes: `maps`, ART headers, JNI table, `getDeclaredMethods` anomalies | no: the process is stock |
-| Does it break on a framework update? | needs a new hook signature | no code table is involved: the selector is the `IPackageManager` interface token and the parcel shape |
-| Where is the hide list? | SharedPreferences XML in the app's data dir | kernel RAM (RCU) + the manager's Keystore-encrypted store; the kernel never sees a file |
-| Root required? | no (Xposed/LSPosed or Shizuku) | yes (kernel) |
-| Works on a locked device without root? | yes | no |
+| Question | HMA-oss | XEChide module | XEChide kernel |
+|---|---|---|---|
+| Dependencies | LSPosed (on Zygisk/Riru) | Zygisk only (Magisk, or Zygisk Next on KSU/APatch) | patched KernelSU kernel |
+| `getInstalledPackages` | Java hook on PMS/`ApplicationPackageManager` | binder reply parcel rewritten before Java | binder reply rewritten in kernel |
+| `getPackageInfo(hidden)` | Java hook returns null | request/reply parcel names rewritten; hidden entries removed | request renamed, PMS itself answers not-found |
+| Native binder callers | not covered (Java only) | covered: `libbinder` ioctl is hooked | covered |
+| External-storage app dirs | not hidden | `Android/data|media|obb` entries hidden, paths answer `ENOENT` | LSM denies the same paths |
+| `maps` self-inspection | finds Xposed classes/ART changes | finds a hooked GOT and an anonymous image | finds nothing |
+| Direct `syscall(SYS_openat)` | can bypass Java hooks | bypasses PLT hooks | kernel still enforces |
+| Process/task/usage lists | partial (per-version Java hooks) | same 12-service parcel filter as the kernel | same |
+| Hide list at rest | SharedPreferences XML in the app data dir | `/data/adb/xechide/config`, 0600 root, plaintext | kernel RAM only |
+| Root required | no (LSPosed/Shizuku) | root solution with Zygisk | root solution with a custom kernel |
+| SELinux policy change | none | none (companion socket for config) | none (deny added after SELinux allows) |
 
-## Why "lower level" is not just marketing
+## "Lower level" is not marketing — but it depends on the form
 
-Hiding in the target's process is **self-contradictory**: the hidden data and
-the code that hides it live in the same address space, so any sufficiently
-paranoid detector can find the hiding code. Kernel-side filtering has no such
-address space: the target cannot inspect kernel memory (unless it has root, in
-which case all bets are off — see `SECURITY.md`).
+Hiding inside the target process is **self-contradictory**: the hidden data and
+the code hiding it share an address space, so a detector can inspect itself and
+find the hook. HMA has that property; so does XEChide's module form (with fewer
+framework fingerprints: no XposedBridge classes, no module class loader, no
+LSPosed daemon, no Java method-table edits).
 
-The price is that XEChide only runs on a KernelSU device with its patch applied,
-and that the reply rewriting has to stay conservative: the parcel is either
-restructured after its element count validates, or renamed in place (same
-length, layout untouched). A detector that resolves every listed package can
-spot a renamed entry, which is documented in `SECURITY.md` rather than papered
-over.
+The kernel form removes the contradiction: the detector's process is stock, and
+the data is gone before it arrives. That is the form to choose if the adversary
+is a native self-inspection checker.
+
+Both XEChide forms accept the same configuration and the same manager, so the
+choice is operational (custom kernel vs. Zygisk), not a rewrite.
 
 ## What we did NOT take from anyone
 
-No HMA-oss code, no LSPosed code, no Shizuku code was read into this project.
-The comparisons above are behavioural, from public documentation. The kernel
-work builds on KernelSU's own hooks (GPL-3.0), which is attributed in
-`NOTICE.md`.
+No HMA-oss code, no LSPosed code and no Shizuku code was read into this project.
+The comparisons are behavioural, from public documentation. The kernel work
+builds on KernelSU's own hooks (GPL-3.0), attributed in `NOTICE.md`. The Zygisk
+ABI structs in `module/src/zygisk_api.h` were written against the published
+interface documentation, not copied from a module implementation.
