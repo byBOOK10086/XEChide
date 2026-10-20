@@ -10,8 +10,12 @@ implemented in `kernel/` or explicitly listed as *not* provided.
   game, a specific banking app, `adb shell`).
 - **rule** — `(target_uid, hidden_uid, hidden_pkg)`; rules are the only thing
   that changes behaviour.
-- Everything runs in the KernelSU kernel module. No userspace process is
-  involved in enforcement, so killing the manager changes nothing.
+- Two delivery forms share this rule ABI and the manager:
+  - **module** (default): a native Zygisk `.so` enforces in the target's process
+    through PLT hooks (section 9);
+  - **kernel** (optional): the KernelSU patch enforces in the kernel (sections
+    1–8 below). No userspace process is involved in enforcement, so killing the
+    manager or the module changes nothing.
 
 ## 1. L0 — file layer
 
@@ -40,7 +44,7 @@ Matching covers the layouts Android really uses:
 | data | `/data/data/<pkg>/`, `/data/user/<n>/<pkg>/`, `/data/user_de/<n>/<pkg>/` |
 | obb/media | `/data/media/<n>/Android/data/<pkg>/`, `/storage/emulated/<n>/...`, `/sdcard/Android/data/<pkg>` |
 | proc | `/proc/<pid>/` where `<pid>`'s uid equals the rule's `hidden_uid` |
-| system database | `/data/system/packages.list`, `/data/system/packages.xml` (denied whole, target uids only) |
+| system database | `/data/system/packages.list`, `packages.xml`, `appops.xml`, `notification_policy.xml`, `package-usage.list`, `usagestats/`, `shortcut_service/`, `job/`, `users/<n>/package-restrictions.xml` (denied whole, target uids only) |
 
 Hard rules:
 
@@ -59,10 +63,12 @@ inside the detector's process, and the data is edited in the kernel.
 Two probes, neither of which reads a binder-internal structure:
 
 1. **`binder_transaction` (request side).** Runs in the caller's context, so
-   `current_uid()` is the target uid. When the parcel carries one of the
+   `current_uid()` is the target uid. When the parcel carries one of twelve
    system-service interface tokens (`IPackageManager`, `IActivityManager`,
-   `IActivityTaskManager`, `IUsageStatsManager`, `IAppOpsService`), the thread
-   is marked and package names in the request are renamed in place, same
+   `IActivityTaskManager`, `ILauncherApps`, `IPackageInstaller`,
+   `IShortcutService`, `IUsageStatsManager`, `IAppOpsService`, `IJobScheduler`,
+   `INotificationManager`, `IWindowManager`, `IAccessibilityManager`), the
+   thread is marked and package names in the request are renamed in place, same
    length. A `getPackageInfo("hidden")` therefore reaches PMS as a request for
    a package that does not exist, and PMS itself produces a genuine
    `NameNotFoundException`.
@@ -86,6 +92,15 @@ Reply rewriting has two strategies, in order:
 
 `offsets_size != 0` (the parcel carries binder objects or file descriptors) is
 always passed through untouched.
+
+Real Android 11+ `IPackageManager.getInstalledPackages` replies wrap the list in
+a `ParceledListSlice`, whose element layout is not self-describing; in practice
+that reply usually takes the **length-preserving rename** path, not structural
+removal. The counters distinguish them (`parcel_rebuilt` vs
+`parcel_rewritten`), and `docs/verification.md` lists the on-device measurement
+that decides whether a device can use the stronger path. This is a real
+difference from HMA (which removes at the Java object level): the module form
+trades the exact remove for native coverage and no Java framework dependency.
 
 Which calls are covered: every transaction of the services above, both
 directions. That is intentionally *not* a table of AIDL transaction codes, which
@@ -167,3 +182,87 @@ Deny decisions are only ever *added* for the hidden paths of a configured
 target uid. Nothing in the design shortens SELinux checks, and no code path
 returns success where the kernel would have returned an error: the hooks can
 only turn an allowed operation into `-ENOENT`, never the other way around.
+
+## 9. Module form (userspace, Zygisk)
+
+The module form exists because a kernel patch is not always an option (locked
+bootloader, vendor kernel, GKI-only devices). It is a freestanding
+`arm64-v8a.so` loaded by Zygisk; no LSPosed, no Java hooks, no libc++ runtime.
+
+### 9.1 Lifecycle
+
+1. **preAppSpecialize** (zygote privileges, before the sandbox):
+   `connectCompanion()` → send `{magic, GET_CONFIG, uid, abi}` → the root
+   companion reads `/data/adb/xechide/config` and returns the packed struct;
+   rules whose `target_uid` matches this uid are selected. No matching rule →
+   nothing is hooked at all.
+2. **PLT registration**: the module finds `libbinder.so`,
+   `libjavacore.so` and `libandroid_runtime.so` in `/proc/self/maps`, resolves
+   their dev/inode with `stat`, and registers replacements for
+   `ioctl` (libbinder) and the file API subset (libjavacore/libandroid_runtime).
+   `pltHookCommit()` runs the same commit path Zygisk itself uses (lsplt).
+3. **postAppSpecialize** (inside the sandbox): verify `getuid()` matches the
+   expected uid, locate the module's own ELF image through maps + ELF program
+   headers, remember its address range, and erase `zygisk_module_entry` /
+   `zygisk_companion_entry` from `.dynstr`. From then on the image is fully
+   initialised and the entry names are gone.
+
+### 9.2 Binder filtering
+
+The `ioctl(fd, BINDER_WRITE_READ, &bwr)` replacement calls the original, then
+walks `bwr.read_buffer` with the public `BR_*` command sizes. On `BR_REPLY` it
+takes the reply's `binder_transaction_data`, rejects anything with
+`offsets_size != 0` or an implausible size, and runs the **same**
+`xe_parcel_filter()` the kernel form uses (structural removal, else
+length-preserving rename). Only `data_size` changes; the read-buffer command
+lengths stay valid. A spin lock serialises the filter because the filter's
+scratch arrays are static and binder replies arrive on several threads.
+
+### 9.3 File and /proc surface
+
+`libjavacore`'s PLT entries for `open/open64/openat/openat64`, `fopen`,
+`stat/lstat/stat64/lstat64`, `access/faccessat`, `opendir/readdir/readdir64/
+closedir`, `readlink/readlinkat` are replaced. The wrappers:
+
+- return forged `ENOENT` for hidden paths (`xe_match_path()` plus the module's
+  media/obb extension) and for our own `/data/adb` paths when self-hide is on;
+- filter `readdir()` results for the tracked directory handles of
+  `Android/{data,media,obb}` parents (with a bounded DIR* table and a spin lock);
+- serve `/proc/self/maps`, `/proc/self/smaps` and `/proc/<self>/maps` through a
+  streaming memfd: lines whose start address lies in the module's own image
+  range are dropped (smaps blocks are dropped as a block);
+- return `ENOENT` for `map_files` entries overlapping the module image.
+
+A hook that was not installed (symbol absent) is simply never called; a missing
+backup pointer is not dereferenced because the wrapper only runs after a
+successful commit.
+
+### 9.4 Failure policy
+
+| Failure | Behaviour |
+|---|---|
+| companion missing / no config | module inactive in that process |
+| uid has no rule | hooks are not registered |
+| lib not mapped / stat fails | that library is skipped |
+| commit returns false | the hooks that did apply stay; others are inactive |
+| parcel shape unknown | reply unchanged |
+| mprotect for `.dynstr` fails | names remain, filtering still works |
+| memfd creation fails | original maps file is served |
+
+### 9.5 SELinux and traces
+
+The companion runs as root because `/data/adb` is root-only; app processes only
+receive bytes over the socket, so no `avc` denial is generated. The module is
+inherently visible inside its own process (GOT, anonymous executable mapping,
+readable memory). Those traces are listed in `SECURITY.md`; the kernel form is
+the answer when they matter.
+
+## 10. Sharing one config between the forms
+
+`xechide-ctl apply` atomically writes the packed config to
+`/data/adb/xechide/config` and, if a patched KernelSU driver is present, applies
+the identical bytes with `KSU_IOCTL_XECHIDE_SET`. The manager therefore does not
+need a mode switch: it reports which forms are present and keeps both in sync.
+The validation rules are the same as section 4; the module additionally rejects
+rules whose `target_uid` does not match the process.
+
