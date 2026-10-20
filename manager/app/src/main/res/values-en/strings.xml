@@ -3,10 +3,18 @@
     <string name="app_name">XEChide Manager</string>
 
     <!-- Home -->
-    <string name="home_subtitle">Kernel-level app hiding</string>
+    <string name="home_subtitle">App hiding · module / kernel</string>
     <string name="status_title">Status</string>
     <string name="status_helper_label">Root helper</string>
     <string name="status_rules_label">Rules</string>
+    <string name="status_module_label">Module (Zygisk)</string>
+    <string name="status_kernel_label">Kernel</string>
+    <string name="status_module_installed">Installed %1$s</string>
+    <string name="status_module_missing">Not installed (flash the module zip + Zygisk)</string>
+    <string name="status_kernel_present">Driver connected</string>
+    <string name="status_kernel_absent">Not detected (advanced option)</string>
+    <string name="status_checking">Checking…</string>
+    <string name="module_status_hint">Module form: flash the XEChide module zip and enable it in Zygisk / Zygisk Next; restart target apps after changing rules. The kernel form is optional; when its driver exists, apply writes both.</string>
     <string name="rules_count">%1$d / %2$d</string>
     <string name="status_last_result_label">Last apply</string>
     <string name="last_never_applied">Not applied yet</string>
@@ -36,11 +44,11 @@
     <string name="target_missing_warning">The all-non-root-apps option is off. Choose at least one target app.</string>
     <string name="apply_config">Apply configuration</string>
     <string name="install_helper">Install/update helper</string>
-    <string name="view_stats">View kernel stats</string>
-    <string name="busy_apply">Applying configuration to the kernel…</string>
+    <string name="view_stats">View kernel stats (kernel form only)</string>
+    <string name="busy_apply">Writing the module config and syncing the kernel…</string>
     <string name="busy_install">Installing/updating helper…</string>
 
-    <string name="home_footer">The configuration is encrypted with Android Keystore, stored in app-private storage, and re-applied by the BOOT_COMPLETED receiver. A KernelSU kernel with the XEChide patch is required. The helper status only checks that the file is executable; it does not verify that the kernel patch is loaded.</string>
+    <string name="home_footer">One configuration drives both forms: the module (Zygisk / Zygisk Next, recommended) and the kernel (KernelSU with the XEChide patch, optional). The configuration is encrypted with Android Keystore, stored in app-private storage, and re-applied at boot; module-mode rule changes need a target app restart. The helper status only checks that the file is executable; it does not verify that the module or the kernel patch is loaded.</string>
 
     <!-- Validation / operation results -->
     <string name="error_no_hidden">Choose at least one app to hide.</string>
@@ -50,10 +58,10 @@
     <string name="error_operation">Operation failed: %1$s</string>
     <string name="snack_apply_success">Configuration applied: %1$d rules.</string>
     <string name="snack_apply_failed">Apply failed (exit code %1$d). See the status card for details.</string>
-    <string name="error_save_config">Applied to the kernel, but saving the configuration failed: %1$s</string>
+    <string name="error_save_config">Applied, but saving the configuration failed: %1$s</string>
 
     <!-- Helper installation -->
-    <string name="helper_asset_missing">The APK does not contain assets/xechide-ctl-arm64. A release APK bundles that binary. Build it with the NDK from ctl/ and place it in app/src/main/assets/ as described in manager/README.md, then rebuild.</string>
+    <string name="helper_asset_missing">The APK does not contain assets/xechide-ctl-arm64. A release APK bundles that binary. Build it with Zig or the NDK from ctl/ and place it in app/src/main/assets/, then rebuild.</string>
     <string name="helper_asset_read_failed">Could not read assets/xechide-ctl-arm64: %1$s</string>
     <string name="helper_asset_empty">assets/xechide-ctl-arm64 is empty.</string>
     <string name="helper_install_success">Helper installed and verified with test -x.</string>
