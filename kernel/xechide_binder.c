@@ -175,11 +175,21 @@ static bool parcel_has_token(const unsigned char *buf, unsigned int len, const c
  * scan and needs no transaction-number table.
  */
 static const char *const xe_service_tokens[] = {
+	/* package + activity surfaces */
 	"android.content.pm.IPackageManager",
 	"android.app.IActivityManager",
 	"android.app.IActivityTaskManager",
+	"android.content.pm.ILauncherApps",
+	"android.content.pm.IPackageInstaller",
+	"android.content.pm.IShortcutService",
+	/* usage / ops / jobs */
 	"android.app.usage.IUsageStatsManager",
 	"com.android.internal.app.IAppOpsService",
+	"android.app.job.IJobScheduler",
+	/* notifications and windows */
+	"android.app.INotificationManager",
+	"android.view.IWindowManager",
+	"android.view.accessibility.IAccessibilityManager",
 };
 
 static bool parcel_names_service(const unsigned char *buf, unsigned int len)
