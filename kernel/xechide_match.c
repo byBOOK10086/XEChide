@@ -127,6 +127,59 @@ static bool match_apk_dir(const char *path, const char *pkg)
 	return p[m] == '-';
 }
 
+/*
+ * Package-name databases under /data/system. A detector that can read any of
+ * them bypasses the binder filter entirely, so a target uid is denied the
+ * whole file (or the whole state directory). Only target uids ever reach this
+ * code, so nothing the system needs is affected.
+ */
+static bool path_prefix_component(const char *path, const char *prefix)
+{
+	size_t n = strlen(prefix);
+
+	if (strncmp(path, prefix, n) != 0)
+		return false;
+	return path[n] == '\0' || path[n] == '/';
+}
+
+static bool match_system_db(const char *path)
+{
+	static const char *const files[] = {
+		"/data/system/packages.list",
+		"/data/system/packages.xml",
+		"/data/system/packages-backup.xml",
+		"/data/system/appops.xml",
+		"/data/system/notification_policy.xml",
+		"/data/system/package-usage.list",
+	};
+	unsigned int i;
+
+	for (i = 0; i < sizeof(files) / sizeof(files[0]); i++)
+		if (!strcmp(path, files[i]))
+			return true;
+
+	if (path_prefix_component(path, "/data/system/shortcut_service") ||
+	    path_prefix_component(path, "/data/system/usagestats") ||
+	    path_prefix_component(path, "/data/system/job"))
+		return true;
+
+	/* /data/system/users/<n>/package-restrictions.xml and friends */
+	if (strncmp(path, "/data/system/users/", 19) == 0) {
+		const char *p = path + 19;
+		const char *rest;
+
+		while (*p >= '0' && *p <= '9')
+			p++;
+		if (*p != '/')
+			return false;
+		rest = p + 1;
+		if (!strcmp(rest, "package-restrictions.xml") || !strcmp(rest, "package-usage.list") ||
+		    !strcmp(rest, "package.xml"))
+			return true;
+	}
+	return false;
+}
+
 int xe_match_path(const struct xechide_rule *rule, const char *path)
 {
 	const char *pkg = (const char *)rule->pkg;
@@ -136,14 +189,7 @@ int xe_match_path(const struct xechide_rule *rule, const char *path)
 	if (!(rule->flags & XECHIDE_RF_PATHS))
 		return false;
 
-	/*
-	 * The package database itself. Denying the whole file is the only
-	 * scalable option, and only target uids ever reach this function; the
-	 * entry is here so a detector that can read packages.list (shell) cannot
-	 * bypass the binder filter by parsing the file.
-	 */
-	if (!strcmp(path, "/data/system/packages.list") ||
-	    !strcmp(path, "/data/system/packages.xml"))
+	if (match_system_db(path))
 		return true;
 
 	if (match_apk_dir(path, pkg))
