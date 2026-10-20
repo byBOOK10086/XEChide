@@ -25,6 +25,26 @@ jobs:
       - name: Build, run and fuzz
         run: make -C tests/host
 
+  module-build:
+    name: Zygisk module (arm64) + zip lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch zig (bundled clang, freestanding android target)
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
+          tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
+
+      - name: Build, package and lint
+        run: ZIG="$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" bash module/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xechide-module
+          path: module/out/*.zip
+          if-no-files-found: error
+
   ctl-build:
     name: root helper compiles
     runs-on: ubuntu-latest
