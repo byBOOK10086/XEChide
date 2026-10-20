@@ -1,8 +1,8 @@
 # config protocol
 
-The manager, the root helper and the kernel share one fixed-size struct
-(`kernel/xechide.h`). There is no filesystem protocol and the kernel never
-parses a file.
+The manager, the root helper and both enforcement forms share one fixed-size
+struct (`kernel/xechide.h`). The kernel form receives it through ioctls; the
+module form reads the same bytes from a root-only file via its companion.
 
 ## Wire struct (packed, 32-bit fields)
 
@@ -71,6 +71,27 @@ published with `rcu_assign_pointer`.
 pushed yet. `STATS` returns `struct xechide_stats` (path/dirent/proc hits,
 parcel rebuilt/rewritten/skipped counters, installed hooks).
 
+## Module consumer
+
+The module form cannot use the ioctls (they belong to the patched KernelSU
+driver). It consumes the **same bytes** from a root-only file:
+
+```
+/data/adb/xechide/config   0600 root:root   exactly 8976 bytes
+```
+
+`xechide-ctl apply` reads one packed struct from stdin, writes it atomically
+(`config.tmp` → `rename`) and then, if a patched driver exists, sends the same
+bytes with `KSU_IOCTL_XECHIDE_SET`. `xechide-ctl status` prints key=value lines
+(`module=`, `module_so=`, `config=`, `config_bytes=`, `kernel=`, `version=`) for
+the manager; `file-get` dumps the file.
+
+In each target process, the Zygisk module's `preAppSpecialize` connects to its
+root companion (`zygiskd64`), which reads the file and returns it over the
+companion socket. The app process never opens `/data/adb` itself — that is what
+keeps the module free of new SELinux policy. A process with no config, or no
+rule whose `target_uid`/`XECHIDE_UID_ALL` matches its uid, installs no hooks.
+
 ## Persistence (manager side)
 
 The kernel deliberately keeps no configuration across reboots: a kernel-side
@@ -81,17 +102,17 @@ after a reinstall. The helper is stateless too.
   an **Android Keystore** AES-GCM key (`EncryptedSharedPreferences`-equivalent).
   Crypto is the platform's job; the helper never sees a key.
 - At boot the manager's `BOOT_COMPLETED` receiver reads it, builds the struct
-  and pipes it into `xechide-ctl set` through `su`.
+  and pipes it into `xechide-ctl apply` through `su`.
 - Missing, locked or undecryptable → empty configuration → nothing is hidden.
 
-The only thing ever written to `/data/adb` is the helper binary itself
-(`/data/adb/xechide/bin/xechide-ctl`), hidden from all non-root uids by the
-kernel's self-hiding rule.
+The helper binary lives at `/data/adb/xechide/bin/xechide-ctl`; in the kernel
+form it is hidden from all non-root uids by the kernel's self-hiding rule, and
+the module form hides its own `/data/adb` paths in the file hooks.
 
 ## Boot
 
 1. Kernel boots with `n_rules == 0`; the hooks are installed but match nothing.
 2. `BOOT_COMPLETED` → the manager pushes the stored configuration with one
-   `SET`.
+   `apply` (module file; kernel ioctl when its driver is present).
 3. Until then nothing is hidden - by design: a failed hide is a bug report, a
    wrong deny is a bricked device.
