@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide manager does not enable R8/minification in the release build.
 # These rules are kept minimal so enabling minification later is predictable.
 #
