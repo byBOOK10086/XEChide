@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-3.0-only
 """Inspect/validate the freestanding XEChide Zygisk module (.so).
 
 Runs on the build host (no Android tooling needed). It parses the ELF header,
