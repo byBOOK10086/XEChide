@@ -92,6 +92,16 @@ companion socket. The app process never opens `/data/adb` itself — that is wha
 keeps the module free of new SELinux policy. A process with no config, or no
 rule whose `target_uid`/`XECHIDE_UID_ALL` matches its uid, installs no hooks.
 
+## KPM consumer
+
+The native APatch KPM reads the same file directly from `KPM_INIT` and keeps two
+static config buffers; `KPM_CTL0("reload")` reads into the inactive buffer and
+publishes the pointer atomically. APatch loads/controls KPMs from the manager
+app's uid, which cannot traverse `/data/adb`, so the root helper mirrors the
+same bytes to `/data/data/me.bmax.apatch/files/xechide.cfg` (0600, APatch uid);
+the KPM falls back to that copy. The file is still written only by
+`xechide-ctl apply`, so all three forms always see identical bytes.
+
 ## Persistence (manager side)
 
 The kernel deliberately keeps no configuration across reboots: a kernel-side
