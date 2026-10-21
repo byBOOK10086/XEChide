@@ -9,12 +9,15 @@
     <string name="status_rules_label">Rules</string>
     <string name="status_module_label">Module (Zygisk)</string>
     <string name="status_kernel_label">Kernel</string>
+    <string name="status_kpm_label">KPM (APatch)</string>
+    <string name="status_kpm_installed">Installed (APatch KPM)</string>
+    <string name="status_kpm_missing">Not installed (APatch KPM)</string>
     <string name="status_module_installed">Installed %1$s</string>
     <string name="status_module_missing">Not installed (flash the module zip + Zygisk)</string>
     <string name="status_kernel_present">Driver connected</string>
     <string name="status_kernel_absent">Not detected (advanced option)</string>
     <string name="status_checking">Checking…</string>
-    <string name="module_status_hint">Module form: flash the XEChide module zip and enable it in Zygisk / Zygisk Next; restart target apps after changing rules. The kernel form is optional; when its driver exists, apply writes both.</string>
+    <string name="module_status_hint">Module form: flash the XEChide module zip and enable it in Zygisk / Zygisk Next. KPM: APatch users install xechide.kpm; the helper mirrors the config into the APatch private data, so reload in the APatch KPM control or a reboot picks it up. The kernel form is optional. Restart target apps after changing rules.</string>
     <string name="rules_count">%1$d / %2$d</string>
     <string name="status_last_result_label">Last apply</string>
     <string name="last_never_applied">Not applied yet</string>
