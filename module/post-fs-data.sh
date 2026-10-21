@@ -13,3 +13,19 @@ if [ ! -f /data/adb/xechide/config ]; then
 fi
 chmod 600 /data/adb/xechide/config 2>/dev/null
 chown root:root /data/adb/xechide/config 2>/dev/null
+
+# APatch loads/controls KPMs from the APatch manager app's uid, which cannot
+# traverse /data/adb. Keep a private 0600 mirror for KPM_INIT/ctl0 there.
+ap_dir=/data/data/me.bmax.apatch
+if [ -d "$ap_dir" ] && [ -s /data/adb/xechide/config ]; then
+    mkdir -p "$ap_dir/files" 2>/dev/null
+    cp -f /data/adb/xechide/config "$ap_dir/files/xechide.cfg" 2>/dev/null
+    owner=$(stat -c %u "$ap_dir" 2>/dev/null)
+    group=$(stat -c %g "$ap_dir" 2>/dev/null)
+    [ -n "$owner" ] || owner=$(/data/adb/ap/bin/busybox stat -c %u "$ap_dir" 2>/dev/null)
+    [ -n "$group" ] || group=$(/data/adb/ap/bin/busybox stat -c %g "$ap_dir" 2>/dev/null)
+    if [ -n "$owner" ] && [ -n "$group" ]; then
+        chown "$owner:$group" "$ap_dir/files" "$ap_dir/files/xechide.cfg" 2>/dev/null
+    fi
+    chmod 600 "$ap_dir/files/xechide.cfg" 2>/dev/null
+fi
