@@ -1,4 +1,5 @@
 #!/system/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide - publish a tiny status file for the manager app.
 # The manager reads it through its root helper; normal apps cannot read
 # /data/adb at all, so this file is not a metadata leak.
