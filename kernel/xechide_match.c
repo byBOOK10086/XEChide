@@ -1,4 +1,4 @@
-﻿/* SPDX-License-Identifier: GPL-2.0 */
+﻿/* SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only */
 /*
  * XEChide - pure path/name matching. No kernel API is used here so the same
  * code is compiled into the module and into the host test suite
