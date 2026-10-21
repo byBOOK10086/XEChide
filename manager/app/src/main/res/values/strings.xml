@@ -9,12 +9,15 @@
     <string name="status_rules_label">规则数量</string>
     <string name="status_module_label">模块端（Zygisk）</string>
     <string name="status_kernel_label">内核端</string>
+    <string name="status_kpm_label">KPM（APatch）</string>
+    <string name="status_kpm_installed">已安装（APatch KPM）</string>
+    <string name="status_kpm_missing">未安装（APatch KPM）</string>
     <string name="status_module_installed">已安装 %1$s</string>
     <string name="status_module_missing">未安装（刷入 module zip + Zygisk）</string>
     <string name="status_kernel_present">驱动已连接</string>
     <string name="status_kernel_absent">未检测到（备用方案）</string>
     <string name="status_checking">检测中…</string>
-    <string name="module_status_hint">模块端：刷入 XEChide module zip，并在 Zygisk / Zygisk Next 中启用；修改规则后需重启目标应用。内核端为可选进阶形态，驱动可用时 apply 会同时写入内核。</string>
+    <string name="module_status_hint">模块端：刷入 XEChide module zip，并在 Zygisk / Zygisk Next 中启用。KPM：APatch 用户安装 xechide.kpm 后，helper 会把配置镜像到 APatch 私有目录；在 APatch KPM 控制里 reload 或重启即可生效。内核端为可选进阶形态。改规则后需重启目标应用。</string>
     <string name="rules_count">%1$d / %2$d 条</string>
     <string name="status_last_result_label">上次应用</string>
     <string name="last_never_applied">尚未应用</string>
