@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-only
 """Cross-check the packed ABI across the four places that encode it.
 
 The kernel header, the manager's Kotlin constants, the root helper's ioctl
