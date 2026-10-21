@@ -86,3 +86,12 @@ git apply /path/to/xechide-core.patch
 
 `tests/README.md` has the exact commands CI runs to prove the patch still
 applies.
+
+## Licensing / provenance
+
+KernelSU is GPL-3.0 at the repository level and its kernel files are
+GPL-2.0-only. This patch adds **new kernel files under GPL-2.0-only** and edits
+KernelSU's Kbuild/init/dispatch/uapi only to wire the new ioctls and init
+calls; it does not relicense or rewrite KernelSU code. The shared ABI/matching
+files carry `GPL-2.0-only OR GPL-3.0-only` because the userspace module and
+host tests reuse them. See `NOTICE.md` and `ACKNOWLEDGEMENTS.md`.
