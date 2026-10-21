@@ -354,7 +354,7 @@ index 0000000..5011134
 +#endif /* _XECHIDE_H */
 diff --git a/new/kernel/xechide/xechide_binder.c b/kernel/xechide/xechide_binder.c
 new file mode 100644
-index 0000000..eca7c11
+index 0000000..94fee5f
 --- /dev/null
 +++ b/kernel/xechide/xechide_binder.c
 @@ -0,0 +1,460 @@
@@ -751,7 +751,7 @@ index 0000000..eca7c11
 +	/* binder_ioctl passes &bwr.read_consumed: a kernel stack address, not a
 +	 * user pointer (bwr is the kernel copy of binder_write_read). Read it
 +	 * directly, as a full binder_size_t. */
-+	used64 = *(volatile u64 *)(uintptr_t)st->consumed;
++	used64 = *(volatile u64 *)st->consumed;
 +	if (!used64 || used64 > XE_PARCEL_MAX)
 +		return 0;
 +	used = (unsigned int)used64;
