@@ -1,4 +1,5 @@
 #!/system/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide - create the private config directory before any app starts.
 # Ownership/permissions are fixed up here because the companion process runs
 # with root privileges but must never trust a world-writable directory.
