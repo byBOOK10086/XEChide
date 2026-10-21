@@ -1,4 +1,5 @@
 #!/system/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide - what a detector can still see.
 #
 # Run on the device, once as the app-shell user and once as root:
