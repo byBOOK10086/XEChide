@@ -34,7 +34,7 @@ jobs:
         run: make -C tests/host
 
   module-build:
-    name: Zygisk module (arm64) + zip lint
+    name: Zygisk module + native KPM (arm64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,13 +44,15 @@ jobs:
           curl -fsSLo "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz
           tar -xf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP"
 
-      - name: Build, package and lint
+      - name: Build, package and lint (KPM SDK fetched at the pinned commit)
         run: ZIG="$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" bash module/build.sh
 
       - uses: actions/upload-artifact@v4
         with:
-          name: xechide-module
-          path: module/out/*.zip
+          name: xechide-module-and-kpm
+          path: |
+            module/out/*.zip
+            kpm/out/*.kpm
           if-no-files-found: error
 
   ctl-build:
