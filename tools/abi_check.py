@@ -189,6 +189,23 @@ def main() -> int:
     check("XE_PROTO_MAGIC" in module_hdr and "xe_read_full" in module_src,
           "companion protocol is length-checked")
 
+    print("== KPM form")
+    kpm_src = read("kpm/src/xechide_kpm.c")
+    kpm_build = read("kpm/build.sh")
+    kpm_checker = read("kpm/tools/kpm_check.py")
+    check('KPM_NAME("xechide")' in kpm_src, "KPM metadata name is xechide")
+    check('KPM_LICENSE("GPL v2")' in kpm_src, "KPM metadata license is GPL v2")
+    check("hook_syscalln" in kpm_src and "hook_wrap" in kpm_src,
+          "KPM uses the KernelPatch hook runtime, not a stub")
+    check("binder_transaction" in kpm_src and "binder_thread_read" in kpm_src,
+          "KPM hooks both binder directions")
+    check("052c73f93dbb84861218086e60a9962c48ff3f7f" in kpm_build,
+          "KPM builds against the pinned KernelPatch SDK commit")
+    check("kernel/xechide_parcel.c" in kpm_build and "kernel/xechide_match.c" in kpm_build,
+          "KPM reuses the shared parcel/matching sources")
+    check("kf_filp_open" in kpm_checker, "KPM checker rejects non-exported kf_filp_* imports")
+    check("/data/adb/xechide/config" in kpm_src, "KPM reads the shared config file")
+
     print()
     print("%d checks, %d failure(s)" % (checks, failures))
     return 1 if failures else 0
