@@ -123,9 +123,21 @@ present).
   syscall** (`syscall(SYS_openat)`) or its own late-loaded native library; the
   kernel form can. See `SECURITY.md`.
 
-## Licence
+## Licence & acknowledgements
 
-GPL-3.0 for the project; the kernel part is GPL-2.0-only like the kernel it is
-built into. See [`LICENSE`](LICENSE) and [`NOTICE.md`](NOTICE.md). No third-party
-hiding code was copied; the Zygisk ABI structs were written from the public
-interface documentation.
+Userspace code (`manager/`, `module/`, `ctl/`, `tools/`, tests, UI) is
+**GPL-3.0-only** (root [`LICENSE`](LICENSE), copy in
+[`LICENSES/GPL-3.0-only.txt`](LICENSES/GPL-3.0-only.txt)). Kernel-only files
+are **GPL-2.0-only**
+([`LICENSES/GPL-2.0-only.txt`](LICENSES/GPL-2.0-only.txt)), matching the kernel
+they are built into. The shared ABI and pure matching/parcel files are
+**GPL-2.0-only OR GPL-3.0-only** so the kernel and the userspace module can
+build the same source without relicensing it. The full split is in
+[`NOTICE.md`](NOTICE.md) and is enforced by `tools/license_check.py`.
+
+XEChide builds on public interfaces from **KernelSU**, **Magisk/Zygisk**,
+**LSPlt**, the **Linux kernel**, **AOSP/AndroidX/Compose** and **Zig**; HMA-oss
+is the project we compare against. Thanks to all of them — the detailed list is
+in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) (中文/English). No third-party
+hiding code was copied.
+
