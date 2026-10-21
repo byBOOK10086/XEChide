@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: GPL-3.0-only  */
 /*
  * XEChide userspace module - Zygisk entry points and root companion.
  *
