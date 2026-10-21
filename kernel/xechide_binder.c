@@ -391,7 +391,7 @@ static int xe_read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 	/* binder_ioctl passes &bwr.read_consumed: a kernel stack address, not a
 	 * user pointer (bwr is the kernel copy of binder_write_read). Read it
 	 * directly, as a full binder_size_t. */
-	used64 = *(volatile u64 *)(uintptr_t)st->consumed;
+	used64 = *(volatile u64 *)st->consumed;
 	if (!used64 || used64 > XE_PARCEL_MAX)
 		return 0;
 	used = (unsigned int)used64;
