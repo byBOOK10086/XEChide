@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 name: build-apk
 
 # Produces an installable debug APK with the root helper already bundled.
