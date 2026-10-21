@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * Minimal <string.h> for the shared core sources when they are compiled into
  * the userspace module with -DXECHIDE_HOST. The actual implementations live in
