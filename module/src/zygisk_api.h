@@ -1,14 +1,14 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-3.0-only */
 /*
  * XEChide - minimal Zygisk module ABI (API v4).
  *
  * Zygisk is the injection framework shipped with Magisk (and provided by
- * Zygisk Next on top of KernelSU/APatch). The official public header is
- * "zygisk.hpp" from topjohnwu/zygisk-module-sample; its licence is a
- * permissive ISC-style grant. We only need the v4 ABI (PLT hooks by
- * dev_t/inode), which Magisk >= 26.4, Zygisk Next and APatch's Zygisk all
- * implement. Keeping our own copy of the six relevant structs avoids pulling
- * libc++/jni.h into a freestanding .so and pins the exact ABI we target.
+ * Zygisk Next on top of KernelSU/APatch). The ABI and names used here belong to
+ * the Zygisk project (Magisk, GPL-3.0); thanks to its authors. This file is an
+ * **independent declaration** of the public v4 layout, written from the
+ * published interface documentation. No Magisk/Zygisk implementation code is
+ * copied, which is what lets the module stay freestanding (no libc++/jni.h)
+ * and pin exactly the ABI it targets.
  *
  * The layouts below are the load-bearing part:
  *
