@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-only  */
 /*
  * Robustness test for the parcel filter: random bytes, valid-looking lists and
  * every length around the parsers' boundaries. Compiled with ASan/UBSan in CI
