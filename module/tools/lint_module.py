@@ -15,6 +15,7 @@ Usage: python module/tools/lint_module.py module/out/xechide-module-vX.zip
 
 import hashlib
 import os
+import subprocess
 import sys
 import zipfile
 
@@ -27,6 +28,7 @@ REQUIRED = {
     "service.sh",
     "uninstall.sh",
     "customize.sh",
+    "xechide.kpm",
     "zygisk/arm64-v8a.so",
 }
 
@@ -102,6 +104,26 @@ def main():
             print("zygisk .so: %d bytes, %d exported symbol(s)" % (len(data), len(exported)))
         finally:
             os.unlink(elf_path)
+
+        with z.open("xechide.kpm") as kp:
+            kpm_data = kp.read()
+        kpm_path = path + ".kpm"
+        with open(kpm_path, "wb") as tmp:
+            tmp.write(kpm_data)
+        checker = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", "..", "kpm", "tools", "kpm_check.py"))
+        try:
+            check = subprocess.run(
+                [sys.executable, checker, kpm_path],
+                capture_output=True, text=True,
+            )
+            if check.returncode != 0:
+                ok = fail("xechide.kpm failed kpm_check.py")
+                print((check.stdout or "")[-1200:])
+            else:
+                print("xechide.kpm: %d bytes, KernelPatch metadata/lifecycle OK" % len(kpm_data))
+        finally:
+            os.unlink(kpm_path)
 
     print("RESULT: " + ("OK" if ok else "FAIL"))
     return 0 if ok else 1
