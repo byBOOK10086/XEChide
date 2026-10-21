@@ -1,7 +1,8 @@
 # XEChide module (Zygisk)
 
-Native `arm64-v8a` Zygisk module. One configuration drives it and the optional
-kernel form; the manager app writes that configuration through the root helper.
+Native `arm64-v8a` Zygisk module, plus a real KernelPatch module for APatch.
+One configuration drives both; the manager app writes that configuration
+through the root helper.
 
 ## Requirements
 
@@ -10,6 +11,10 @@ kernel form; the manager app writes that configuration through the root helper.
   - Magisk's built-in Zygisk (Magisk 26.4+), or
   - **Zygisk Next** on KernelSU / APatch.
 - No LSPosed, no Xposed, no custom kernel.
+- On **APatch/KernelPatch**, the zip also installs a native KPM
+  (`xechide.kpm`) into `/data/adb/ap/kpm/xechide`. APatch's KPM engine runs it
+  in the kernel; Zygisk is not required for that form. KernelSU's own KPM
+  loader is not a supported host for it (it lacks the KernelPatch hook runtime).
 
 If Zygisk reports API v4 unsupported, the module refuses to initialise
 (`registerModule` fails) instead of running with a mismatched table.
@@ -23,6 +28,11 @@ If Zygisk reports API v4 unsupported, the module refuses to initialise
 3. Pick hidden apps / targets in the manager and press **应用配置**.
 4. **Restart the target apps.** A process fetches the config when it starts;
    changing rules does not retroactively update a running detector.
+5. **APatch/KPM:** the root helper mirrors the config into APatch's private data
+   (0600, APatch uid) so the APatch-app KPM loader/control can read it; after
+   applying rules, **reboot** or send `reload` in APatch's KPM control dialog.
+   The module zip's `customize.sh` has already copied `xechide.kpm` into
+   APatch's KPM store.
 
 The config file is `/data/adb/xechide/config` (0600 root). The root companion
 (`zygiskd64` hosting our handler) reads it and sends it over the companion
@@ -39,7 +49,10 @@ socket; app processes never read `/data/adb` themselves.
   entries and answers `ENOENT` for the hidden app's paths (HMA does not do this);
 - filters the module's own `/proc/self/maps`, `/proc/self/smaps` and
   `/proc/*/map_files` view;
-- erases its own Zygisk entry names from `.dynstr` after load.
+- erases its own Zygisk entry names from `.dynstr` after load;
+- ships and installs **`xechide.kpm`**, a real ET_REL KernelPatch module for
+  APatch (see `kpm/README.md`). Its binder hooks are ABI-independent; path
+  syscall hooks cover 64-bit processes.
 
 ## What it does **not** do
 
@@ -71,10 +84,11 @@ Windows: `powershell -ExecutionPolicy Bypass -File module\build.ps1 -Zip`
 
 ```
 module.prop        Magisk/KernelSU module metadata
-customize.sh       installer hook: create the private config dir
-post-fs-data.sh    fix ownership/permissions before apps start
-service.sh         publish /data/adb/xechide/status for the manager
-uninstall.sh       remove /data/adb/xechide
+customize.sh       installer hook: config dir + APatch KPM store copy
+post-fs-data.sh    fix ownership/permissions and mirror config for APatch
+service.sh         publish status and mirror config for APatch
+uninstall.sh       remove /data/adb/xechide and the APatch KPM copy
+xechide.kpm        native KernelPatch module (built by kpm/build.sh)
 zygisk/*.so        built artifact (not committed; CI and build.sh produce it)
 src/               entry + companion, libc shims, binder and file hooks
 ```
@@ -90,8 +104,9 @@ src/               entry + companion, libc shims, binder and file hooks
 ## Licence
 
 The module is **GPL-3.0-only** (see the repository `LICENSE` and `NOTICE.md`).
-It shares three files with the kernel form (`kernel/xechide.h`,
-`xechide_match.c`, `xechide_parcel.c`) under `GPL-2.0-only OR GPL-3.0-only`;
-the kernel uses the GPL-2.0 option and this module uses GPL-3.0. Thanks to
-KernelSU, Magisk/Zygisk, LSPlt and the other upstreams listed in
+The bundled KPM is **GPL-2.0-or-later** (source in `kpm/`). It shares three
+files with the kernel form (`kernel/xechide.h`, `xechide_match.c`,
+`xechide_parcel.c`) under `GPL-2.0-only OR GPL-3.0-only`; the kernel/KPM use the
+GPL-2.0 option and this module uses GPL-3.0. Thanks to KernelSU,
+KernelPatch/APatch, Magisk/Zygisk, LSPlt and the other upstreams listed in
 `ACKNOWLEDGEMENTS.md`.
