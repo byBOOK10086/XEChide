@@ -2,17 +2,18 @@
 
 [![ci](https://github.com/byBOOK10086/XEChide/actions/workflows/ci.yml/badge.svg)](https://github.com/byBOOK10086/XEChide/actions/workflows/ci.yml)
 
-**App and path hiding with two delivery forms and one configuration.**
+**App and path hiding with three delivery forms and one configuration.**
 
 | Form | How it runs | Requirements | Status |
 |---|---|---|---|
-| **Module** (recommended) | native **Zygisk** module; a freestanding `arm64-v8a.so` is injected into app processes | Magisk's Zygisk, or **Zygisk Next** on KernelSU/APatch; Android 11+ | builds & zip-lints in CI |
+| **Module** (recommended for most devices) | native **Zygisk** module; a freestanding `arm64-v8a.so` is injected into app processes | Magisk's Zygisk, or **Zygisk Next** on KernelSU/APatch; Android 11+ | builds & zip-lints in CI |
+| **KPM** (native APatch) | a real KernelPatch Module (`.kpm`) loaded by APatch/KernelPatch's KPM engine | APatch / KernelPatch with its KPM runtime; no custom kernel image | builds & KPM-checks in CI |
 | **Kernel** (optional, advanced) | the original patch to KernelSU `0faec0cc`; filtering happens in the kernel | a kernel built from the patched KernelSU tree | patch checked against the pinned upstream; no device run yet |
 
-Both forms consume the **same packed configuration** (`kernel/xechide.h`,
+All three forms consume the **same packed configuration** (`kernel/xechide.h`,
 8976 bytes) and are driven by the same manager app. The module form needs **no
-LSPosed** and no custom kernel; the kernel form needs no Zygisk and leaves the
-target process completely stock.
+LSPosed**, the KPM form needs **no custom kernel image**, and the kernel form
+leaves the target process completely stock.
 
 > XEChide is a **standalone project**: its own module, its own manager app, its
 > own config format. It does not depend on, share code with, or ship inside any
@@ -49,6 +50,27 @@ an anonymous executable mapping exists, the module's memory is readable). Those
 are documented in [`SECURITY.md`](SECURITY.md) rather than papered over. The
 kernel form exists precisely for people who cannot accept them.
 
+## KPM form (native APatch)
+
+`kpm/` is a **real KernelPatch Module**, built as an ET_REL AArch64 ELF with the
+public KernelPatch KPM SDK (pinned commit, fetched at build time) and loaded by
+APatch/KernelPatch's KPM engine. It is the kernel-form enforcement without
+building a kernel:
+
+- hooks `binder_transaction` / `binder_thread_read` (6-arg signature) and
+  rewrites requests/replies with the same `kernel/xechide_parcel.c` used by the
+  kernel patch;
+- hooks `openat`, `newfstatat`, `faccessat`/`faccessat2`, `readlinkat`, `statx`,
+  `openat2` and `getdents64` for the current uid, hiding configured paths and
+  directory entries;
+- reads the same `/data/adb/xechide/config`, validates it, and exposes
+  `reload`/`status` through `KPM_CTL0` (APatch's KPM control dialog).
+
+It is **not** a script wrapper and **not** an LKM. KernelSU's own `CONFIG_KPM`
+loader (`sukisu_handle_kpm`) only provides a small symbol table and does not
+provide the KernelPatch `hook_*` runtime; this KPM intentionally targets
+APatch/KernelPatch. The Zygisk module remains the KernelSU path.
+
 ## Kernel form (optional)
 
 The original design still lives in this repository: one patch against stock
@@ -62,7 +84,8 @@ kernel half of the docs are unchanged by the module work.
 ## Repository layout
 
 ```
-module/      Zygisk module: freestanding .so, root companion, build + zip tools
+module/      Zygisk module + native KPM packaging (freestanding .so, root companion)
+kpm/         real KernelPatch Module (KPM): source, SDK build, checker
 kernel/      shared packed ABI + pure matching/parcel code, kernel enforcement sources
 patches/     unified diff against stock KernelSU (optional kernel form)
 ctl/         stateless root helper: writes module config, sets kernel config
@@ -79,7 +102,14 @@ Module (no Android NDK; Zig 0.15.x provides clang + the freestanding target):
 
 ```sh
 ZIG=/path/to/zig bash module/build.sh
-# -> module/out/xechide-module-vX.zip, linted (module.prop, layout, ELF, exports)
+# -> module/out/xechide-module-vX.zip (Zygisk .so + xechide.kpm), linted
+```
+
+KPM only (builds against the pinned KernelPatch SDK; needs network or `KP_SRC`):
+
+```sh
+ZIG=/path/to/zig bash kpm/build.sh
+# -> kpm/out/xechide.kpm, validated by kpm/tools/kpm_check.py
 ```
 
 Manager (JDK 17 + Android SDK 35):
@@ -105,7 +135,23 @@ Kernel form: apply `patches/xechide-core.patch` to KernelSU at the commit in
 Requires 64-bit (`arm64-v8a`) app processes. 32-bit apps are not filtered by the
 module form yet; use the kernel form if that matters.
 
+### KPM form (APatch)
+
+1. Install APatch/KernelPatch and open the KPM page.
+2. Install `kpm/out/xechide.kpm` (or let the XEChide module's installer copy it
+   to `/data/adb/ap/kpm/xechide/xechide.kpm`), then reboot/load it.
+3. The same manager writes `/data/adb/xechide/config`; the root helper also
+   mirrors it into APatch's private data (0600, APatch uid) so the APatch-app
+   KPM loader/control can read it. **Reboot** or send `reload` in the APatch
+   KPM control to load the new rules.
+4. 64-bit app processes only for the path syscall hooks; the binder hooks are
+   ABI-independent.
+
+KernelSU's `CONFIG_KPM` loader is **not** a supported host for this KPM (it
+does not expose the KernelPatch hook runtime). Use the Zygisk module there.
+
 ### Kernel form
+
 
 Apply the patch, build/flash the kernel, then use the same manager and helper
 (`apply` writes both the module file and the kernel ioctl when the patch is
@@ -113,10 +159,13 @@ present).
 
 ## Status and honesty
 
-- The module `.so` is **built** (AArch64, ET_DYN, no `DT_NEEDED`, two exported
+- The Zygisk `.so` is **built** (AArch64, ET_DYN, no `DT_NEEDED`, two exported
   Zygisk entries) and the zip is machine-linted; the manager APK builds.
+- The KPM is **built against the real KernelPatch SDK** (ET_REL, `.kpm.info`,
+  `.kpm.init/ctl0/exit` sections, only exported runtime symbols; no
+  `kf_filp_*` non-exported imports) and validated by `kpm_check.py`.
 - The kernel patch applies cleanly to the pinned stock KernelSU commit.
-- Host tests and fuzzing cover the pure matching/parcel code shared by both
+- Host tests and fuzzing cover the pure matching/parcel code shared by all
   forms. **Nothing has been run on a device yet**; `docs/verification.md` is the
   checklist before any claim gets stronger.
 - The module form cannot hide files from a detector that uses a **direct
@@ -130,14 +179,17 @@ Userspace code (`manager/`, `module/`, `ctl/`, `tools/`, tests, UI) is
 [`LICENSES/GPL-3.0-only.txt`](LICENSES/GPL-3.0-only.txt)). Kernel-only files
 are **GPL-2.0-only**
 ([`LICENSES/GPL-2.0-only.txt`](LICENSES/GPL-2.0-only.txt)), matching the kernel
-they are built into. The shared ABI and pure matching/parcel files are
-**GPL-2.0-only OR GPL-3.0-only** so the kernel and the userspace module can
-build the same source without relicensing it. The full split is in
-[`NOTICE.md`](NOTICE.md) and is enforced by `tools/license_check.py`.
+they are built into. The KPM form is **GPL-2.0-or-later**
+([`LICENSES/GPL-2.0-or-later.txt`](LICENSES/GPL-2.0-or-later.txt)) and is built
+against the GPL-2.0-or-later KernelPatch SDK. The shared ABI and pure
+matching/parcel files are **GPL-2.0-only OR GPL-3.0-only** so the kernel, KPM
+and userspace module can build the same source without relicensing it. The
+full split is in [`NOTICE.md`](NOTICE.md) and is enforced by
+`tools/license_check.py`.
 
-XEChide builds on public interfaces from **KernelSU**, **Magisk/Zygisk**,
-**LSPlt**, the **Linux kernel**, **AOSP/AndroidX/Compose** and **Zig**; HMA-oss
-is the project we compare against. Thanks to all of them — the detailed list is
-in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md) (中文/English). No third-party
-hiding code was copied.
+XEChide builds on public interfaces from **KernelSU**, **KernelPatch/APatch**,
+**Magisk/Zygisk**, **LSPlt**, the **Linux kernel**, **AOSP/AndroidX/Compose**
+and **Zig**; HMA-oss is the project we compare against. Thanks to all of them —
+the detailed list is in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md)
+(中文/English). No third-party hiding code was copied.
 
