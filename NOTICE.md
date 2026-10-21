@@ -1,41 +1,76 @@
 # NOTICE
 
-## License
+## Copyright
 
-XEChide is licensed under the GNU General Public License v3.0 (see `LICENSE`).
-The kernel part (`kernel/*.c`, `.h`, Kbuild fragments) is GPL-2.0-only, matching
-the Linux kernel it is compiled into; each file's SPDX header says so.
+XEChide is Copyright (C) 2026 the XEChide authors and contributors.
 
-## Independence
+## License boundaries
 
-XEChide is a **standalone project**. It does not ship inside, import from, or
-depend on any other KernelSU fork, module, app or design system. The only
-external thing it relies on is the public KernelSU kernel interface (the
-supercall table and the manager-authentication check), which is GPL-3.0 and is
-attributed below.
+Three license groups coexist in this repository on purpose:
 
-## Built on
+| Group | Files | License |
+|---|---|---|
+| Userspace | `manager/`, `module/` (except the shared files below), `ctl/`, `tools/`, `tests/`, `ui/`, docs | **GPL-3.0-only** — root `LICENSE`, copy in `LICENSES/GPL-3.0-only.txt` |
+| Kernel-only | `kernel/xechide_core.c`, `kernel/xechide_lsm.c`, `kernel/xechide_binder.c` | **GPL-2.0-only** — copy in `LICENSES/GPL-2.0-only.txt` |
+| Shared | `kernel/xechide.h`, `kernel/xechide_match.c`, `kernel/xechide_parcel.c` | **GPL-2.0-only OR GPL-3.0-only** |
 
-- **Linux kernel** — GPL-2.0-only. The hooks XEChide registers
-  (`security_inode_permission`, `security_inode_getattr`, the directory actor,
-  and a `binder_transaction` kprobe) are standard kernel APIs.
-- **KernelSU** (`tiann/KernelSU`, GPL-3.0) — the supercall dispatch table and the
-  "only the authenticated manager may call" permission flag. XEChide's ioctls
-  are new numbers in a reserved range; no KernelSU source is copied here.
-- **Zygisk** (part of Magisk, GPL-3.0) — the module form runs as a Zygisk
-  module. The ABI structs in `module/src/zygisk_api.h` were written from the
-  published interface documentation; no Magisk or Zygisk source is copied or
-  vendored. The module uses the loader's public `pltHookRegister` API.
+The shared files are the packed ABI and the pure matching/parcel logic. The
+kernel builds them under GPL-2.0 (the kernel's license); the Zygisk module,
+helper and host tests build the same files under GPL-3.0. Each file's SPDX
+header states the expression; `tools/license_check.py` enforces the split.
 
-## No third-party code was copied
+The patch in `patches/xechide-core.patch` adds GPL-2.0-only code to a KernelSU
+tree and does not relicense KernelSU or any file it did not author. The
+KernelSU base commit is recorded in `patches/README.md`.
 
-- **HMA-oss** (Hide My Apps): compared against in `docs/comparison-hma.md` from
-  public documentation only — no code, assets or resource files were taken.
-- **LSPosed / Shizuku**: Java hook frameworks rejected by design; not vendored.
-- **TrickyStore** (ships without a licence) and **OhMyKeymint** (AGPL-3.0): not
-  used, not referenced.
+No additional restrictions are placed on any GPL-licensed code: the complete
+corresponding source is this repository.
+
+## Upstream acknowledgements
+
+XEChide is built on public interfaces from several upstream projects. We thank
+their authors and contributors. The full list, with what is used and what is
+not, is in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).
+
+- **KernelSU** (`tiann/KernelSU`, GPL-3.0; kernel files GPL-2.0) — the optional
+  kernel form is a patch against the pinned commit
+  `0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2` and uses the public supercall
+  dispatch table, `ksu_lsm_hook()` and manager authentication. No KernelSU
+  source is copied into this repository.
+- **Magisk / Zygisk** (`topjohnwu/Magisk`, GPL-3.0) — the module form runs as a
+  Zygisk module and calls the public v4 module API (`registerModule`,
+  `connectCompanion`, `pltHookRegister`, `pltHookCommit`). The ABI declarations
+  in `module/src/zygisk_api.h` were written independently from the published
+  interface documentation; no Magisk/Zygisk implementation code is vendored.
+- **LSPlt** (`LSPosed/LSPlt`, LGPL-3.0) — the PLT hook implementation used
+  *inside* Magisk's Zygisk API. XEChide calls the Zygisk API only; LSPlt code is
+  not vendored, linked or modified here.
+- **Linux kernel** (GPL-2.0) — LSM, kprobe and binder UAPI structures.
+- **Android Open Source Project / AndroidX / Jetpack Compose / Material
+  Components** (Apache-2.0) — the manager's platform and UI dependencies. They
+  are build dependencies, not vendored source.
+- **Zig** (`ziglang/zig`, MIT) — the compiler used to build the freestanding
+  module and the static helper; a build tool only.
+- **HMA-oss** — the project we compare against and learned the problem from.
+  No HMA code, assets or resource files were taken; the comparison is
+  behavioural, from public documentation. Thanks to its authors.
+
+## No third-party code copied
+
+- No HMA-oss code, assets or resource files.
+- No LSPosed, Shizuku, Magisk or Zygisk implementation code is copied; the
+  module contains an independent declaration of the public ABI and its own
+  implementation.
+- No LSPlt code is vendored; the PLT hook engine is whatever the installed
+  Zygisk provides at runtime.
+- **TrickyStore** (ships without a license) and **OhMyKeymint** (AGPL-3.0) are
+  not used, not vendored and not referenced by code.
+- The `zygisk.hpp` sample header from topjohnwu/zygisk-module-sample is **not**
+  included; `module/src/zygisk_api.h` is a minimal, independent declaration of
+  the same public ABI.
 
 ## Trademarks
 
-Android and KernelSU are trademarks of their respective owners. This project is
-not affiliated with Google or the KernelSU maintainers.
+Android is a trademark of Google LLC. KernelSU, Magisk, Zygisk, LSPosed and
+LSPlt are projects of their respective authors. This project is not affiliated
+with Google, the KernelSU maintainers or the Magisk maintainers.
