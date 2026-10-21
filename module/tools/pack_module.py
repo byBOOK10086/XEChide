@@ -32,9 +32,13 @@ def main():
         "post-fs-data.sh",
         "service.sh",
         "uninstall.sh",
+        "xechide.kpm",
         "zygisk/arm64-v8a.so",
     ]
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    if not os.path.isfile(os.path.join(src, "xechide.kpm")):
+        raise SystemExit("missing " + os.path.join(src, "xechide.kpm") +
+                         " (build the KPM first: kpm/build.sh)")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for name in files:
             path = os.path.join(src, name)
