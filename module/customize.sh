@@ -1,4 +1,5 @@
 #!/system/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide - installer hook (Magisk/KernelSU). Nothing is patched; just create
 # the private config directory so the first boot does not race the companion.
 
