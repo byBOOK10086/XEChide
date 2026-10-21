@@ -6,13 +6,13 @@ Their detection surfaces are different; this document says which is which.
 
 ## Who we defend against
 
-| Adversary | Capability | Module form | Kernel form |
-|---|---|---|---|
-| Ordinary detector app | `getInstalledPackages`, `queryIntent*`, direct file access | binder parcels filtered before Java; `libjavacore` paths answer `ENOENT` | kernel filters replies and path lookups |
-| Detector that inspects **its own** process | `maps`, ELF/dynsym scan, GOT check, memory scan | **can find** the injected image / a patched GOT entry | **nothing to find**: no code in the process |
-| Detector with shell (`adb shell`, Shizuku) | uid 2000, `pm list packages`, `ls /data/app` | not injected into shell, so not covered | uid 2000 is just another target |
-| Root scanner (`su -c`) | kernel memory, `/proc/kallsyms`, `/data/adb` | out of scope; root sees the module/config | out of scope; root sees the kernel hooks |
-| Forensic image of `/data` | offline | config is root-only, plaintext at rest (see below) | config is kernel RAM only |
+| Adversary | Capability | Module form | KPM form | Kernel form |
+|---|---|---|---|---|
+| Ordinary detector app | `getInstalledPackages`, `queryIntent*`, direct file access | binder parcels filtered before Java; `libjavacore` paths answer `ENOENT` | kernel binder/syscall hooks, no in-process code | kernel filters replies and path lookups |
+| Detector that inspects **its own** process | `maps`, ELF/dynsym scan, GOT check, memory scan | **can find** the injected image / a patched GOT entry | **nothing to find** (kernel hooks) | **nothing to find** |
+| Detector with shell (`adb shell`, Shizuku) | uid 2000, `pm list packages`, `ls /data/app` | not injected into shell, so not covered | uid 2000 is a normal syscall caller; rules can target it | uid 2000 is just another target |
+| Root scanner (`su -c`) | kernel memory, `/proc/kallsyms`, `/data/adb` | out of scope; root sees the module/config | out of scope; root sees inline hooks/kallsyms | out of scope; root sees the kernel hooks |
+| Forensic image of `/data` | offline | config is root-only, plaintext at rest (see below) | config is root-only, plaintext at rest | config is kernel RAM only |
 
 The module form is a **userspace injection** by definition. It reduces what a
 Java-level detector sees, and it covers native binder and file access that HMA's
@@ -48,6 +48,9 @@ that is the threat you care about, use the kernel form.
   never deletes the previous config.
 - Parcel rewriting stays conservative: restructure only when the element count
   and boundaries validate, otherwise rename in place with an identical length.
+- KPM form: the same conservative parcel rule plus syscall hooks that only turn
+  an allowed lookup into `-ENOENT`; a missing runtime symbol disables the
+  dependent hooks instead of faking success.
 
 ## Module-form detection surface that remains
 
@@ -69,6 +72,32 @@ Mitigations that are implemented: config never enters the app's filesystem view;
 `.dynstr` after load; `maps`/`smaps` are filtered; no logs or debug strings are
 emitted in release; the module is loaded by Zygisk from memfd, so no
 `/data/adb/modules/...` path appears in the target's mappings.
+
+## KPM-form detection surface that remains
+
+The KPM runs in the kernel, so there is no injected image, GOT entry or module
+mapping in any app process. What remains is root/kernel-level:
+
+- **kallsyms / inline hooks**: `hook_wrap` patches the prologue of
+  `binder_transaction`/`binder_thread_read` (and the syscall wrappers). A root
+  scanner can inspect kernel text, kallsyms and Module KPM metadata. Ordinary
+  apps cannot read kernel memory or `/proc/kallsyms`.
+- **KPM metadata**: `/data/adb/ap/kpm/xechide/xechide.kpm` and the KPM list are
+  root-readable only; the metadata is intentionally honest (`name=xechide`,
+  `license=GPL v2`).
+- **Config mirror**: the helper copies the packed config to
+  `/data/data/me.bmax.apatch/files/xechide.cfg` (0600, APatch uid) so APatch's
+  app-uid KPM loader/control can read it. The APatch manager (a root manager)
+  and root can read it; ordinary apps cannot cross the app-data boundary.
+- **APatch/KernelPatch itself**: the root solution is visible to root detection;
+  XEChide does not try to hide its host.
+- 32-bit path syscalls are not hooked (binder hooks are ABI-independent).
+- `dumpsys`, notifications, Play Integrity and post-install packages are the
+  same exclusions as the other forms.
+
+SELinux: the KPM form does not change SELinux policy. Syscall hooks return a
+forged `-ENOENT` before the syscall reaches SELinux, so no `avc` denial is
+generated; binder filtering changes parcels only after SELinux’s binder checks.
 
 ## SELinux
 
