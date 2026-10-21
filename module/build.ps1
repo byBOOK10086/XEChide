@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-3.0-only
 # Build the XEChide Zygisk module with Zig (no Android NDK required).
 #
 #   pwsh -File module\build.ps1              # build arm64-v8a.so
