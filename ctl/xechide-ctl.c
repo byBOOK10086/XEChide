@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: GPL-3.0-only  */
 /*
  * xechide-ctl - apply/read the XEChide configuration.
  *
@@ -55,6 +55,7 @@
 #define MODULE_DIR "/data/adb/modules/xechide"
 #define MODULE_PROP MODULE_DIR "/module.prop"
 #define MODULE_SO MODULE_DIR "/zygisk/arm64-v8a.so"
+#define KPM_FILE "/data/adb/ap/kpm/xechide/xechide.kpm"
 
 static struct xechide_config cfg;
 static struct xechide_stats stats;
@@ -182,6 +183,41 @@ static int write_config_file(void)
 	return 0;
 }
 
+static void mirror_apatch_config(void)
+{
+	static const char apatch_dir[] = "/data/data/me.bmax.apatch";
+	static const char apatch_files[] = "/data/data/me.bmax.apatch/files";
+	static const char apatch_cfg[] = "/data/data/me.bmax.apatch/files/xechide.cfg";
+	static const char apatch_tmp[] = "/data/data/me.bmax.apatch/files/xechide.cfg.tmp";
+	struct stat dirst;
+	int fd;
+
+	/* The APatch KPM loader/control runs in the APatch manager app's uid.
+	 * That process cannot read /data/adb, so keep a 0600 copy in APatch's
+	 * private data. Failure here never fails the primary apply. */
+	if (stat(apatch_dir, &dirst) < 0)
+		return;
+	(void)mkdir(apatch_files, 0700);
+	(void)chown(apatch_files, dirst.st_uid, dirst.st_gid);
+	(void)chmod(apatch_files, 0700);
+	fd = open(apatch_tmp, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+	if (fd < 0)
+		return;
+	if (write_all(fd, &cfg, sizeof(cfg)) < 0) {
+		close(fd);
+		unlink(apatch_tmp);
+		return;
+	}
+	(void)fsync(fd);
+	close(fd);
+	if (rename(apatch_tmp, apatch_cfg) < 0) {
+		unlink(apatch_tmp);
+		return;
+	}
+	(void)chown(apatch_cfg, dirst.st_uid, dirst.st_gid);
+	(void)chmod(apatch_cfg, 0600);
+}
+
 static int cmd_apply(void)
 {
 	int ret = read_config_stdin();
@@ -193,6 +229,7 @@ static int cmd_apply(void)
 	if (ret)
 		return ret;
 	printf("file=ok\n");
+	mirror_apatch_config();
 
 	fd = install_driver_fd(false);
 	if (fd < 0) {
@@ -333,6 +370,7 @@ static int cmd_status(void)
 
 	printf("module=%d\n", access(MODULE_PROP, F_OK) == 0 ? 1 : 0);
 	printf("module_so=%d\n", access(MODULE_SO, F_OK) == 0 ? 1 : 0);
+	printf("kpm=%d\n", access(KPM_FILE, F_OK) == 0 ? 1 : 0);
 
 	if (access(CONFIG_PATH, F_OK) == 0 && stat(CONFIG_PATH, &st) == 0) {
 		printf("config=1\n");
