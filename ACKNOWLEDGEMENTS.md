@@ -12,6 +12,7 @@ No implementation code is copied; see `NOTICE.md` for the licence boundaries.
 | [Magisk / Zygisk](https://github.com/topjohnwu/Magisk) | 模块端的加载器与 public Zygisk module API v4（`registerModule` / `connectCompanion` / `pltHookRegister` / `pltHookCommit`） | GPL-3.0 | `module/src/zygisk_api.h` 是独立编写的 ABI 声明，不是从 Magisk 复制；没有 vendor 任何实现代码。 |
 | [LSPlt](https://github.com/LSPosed/LSPlt) | Zygisk 的 `pltHookRegister` 内部使用的 PLT hook 实现 | LGPL-3.0 | 只经 Zygisk API 间接使用；本仓库没有 vendor/链接/修改 LSPlt 代码。 |
 | [Zygisk Next](https://github.com/Dr-TSNG/ZygiskNext) | KernelSU/APatch 上的可选 Zygisk 运行时 | 以上游为准 | 外部运行时，本仓库不分发；感谢其兼容性工作。 |
+| [KernelPatch](https://github.com/bmax121/KernelPatch) / [APatch](https://github.com/bmax121/APatch) | 原生 KPM：KPM 加载器、`hook_syscalln`/`hook_wrap`/`kallsyms_lookup_name` 运行时 API、`kpm.h` 与模块格式 | GPL-2.0 | 固定使用 KernelPatch 提交 `052c73f9…` 的公开头文件（构建时拉取，不 vendor）；`kpm/` 下的 `.kpm` 是真 KPM，不是脚本包装/LKM。感谢 bmax121 与 KernelPatch/APatch 社区。 |
 | [Linux kernel](https://kernel.org/) | LSM / kprobe / binder UAPI 结构 | GPL-2.0 | 只使用标准内核接口。 |
 | [Android Open Source Project](https://source.android.com/)、[AndroidX](https://developer.android.com/jetpack/androidx)、[Jetpack Compose](https://developer.android.com/jetpack/compose) | manager 的运行平台与 UI 依赖 | Apache-2.0 | 构建依赖，不 vendor 源码。 |
 | [HMA-oss](https://github.com/Dr-TSNG/Hide-My-Applist) | 对比对象与问题定义 | 以上游为准 | 没有使用其代码/资源；`docs/comparison-hma.md` 只做行为对比。感谢 HMA 作者把这个问题做透。 |
