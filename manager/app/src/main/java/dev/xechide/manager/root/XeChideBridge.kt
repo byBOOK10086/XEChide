@@ -36,6 +36,7 @@ object XeChideBridge {
         val configPresent: Boolean,
         val configBytes: Long,
         val kernelDriver: Boolean,
+        val kpmInstalled: Boolean,
         val version: String?,
     ) {
         val moduleActive: Boolean get() = moduleInstalled && moduleSo
@@ -99,6 +100,7 @@ object XeChideBridge {
             configPresent = values["config"] == "1",
             configBytes = values["config_bytes"]?.toLongOrNull() ?: 0L,
             kernelDriver = values["kernel"] == "1",
+            kpmInstalled = values["kpm"] == "1",
             version = values["version"]?.takeIf { it.isNotBlank() },
         )
     }
