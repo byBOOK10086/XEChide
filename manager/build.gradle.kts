@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Top-level build file. Plugin versions are intentionally pinned: the manager
 // is built with the Android Studio / Gradle combination listed in README.md.
 plugins {
