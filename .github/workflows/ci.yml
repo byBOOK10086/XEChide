@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 name: ci
 
 on:
@@ -15,6 +16,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 tools/abi_check.py
+
+  license-audit:
+    name: license split + upstream attribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/license_check.py
 
   host-tests:
     name: host tests (matching + parcel + ASan fuzz)
