@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-3.0-only
 """Deterministically package the XEChide Zygisk module zip.
 
 The module root is the zip root: Magisk reads module.prop from there and
