@@ -123,10 +123,10 @@ index 13c9c59..325affd 100644
          .name = NULL,
 diff --git a/new/kernel/xechide/README.md b/kernel/xechide/README.md
 new file mode 100644
-index 0000000..c387579
+index 0000000..0661868
 --- /dev/null
 +++ b/kernel/xechide/README.md
-@@ -0,0 +1,75 @@
+@@ -0,0 +1,89 @@
 +# kernel/ — the module side
 +
 +These five files are compiled into `kernelsu.ko` (or the built-in module) by
@@ -202,13 +202,27 @@ index 0000000..c387579
 +```
 +
 +Counters are available through `KSU_IOCTL_XECHIDE_STATS` (`ctl/README.md`).
++
++## Licensing and provenance
++
++- `xechide_core.c`, `xechide_lsm.c`, `xechide_binder.c`: **GPL-2.0-only**
++  (`LICENSES/GPL-2.0-only.txt`), like the kernel code they are built into.
++- `xechide.h`, `xechide_match.c`, `xechide_parcel.c`: **GPL-2.0-only OR
++  GPL-3.0-only**. The kernel form uses the GPL-2.0 option; the Zygisk module,
++  helper and host tests use the GPL-3.0 option. This is the only reason the
++  same pure logic can be shared without duplicating or relicensing it.
++- The patch applies to KernelSU `tiann/KernelSU` at the pinned commit recorded
++  in `patches/README.md`. It only calls KernelSU's public supercall and
++  `ksu_lsm_hook()` interfaces; no KernelSU implementation code is copied and
++  no KernelSU file is relicensed.
++- See `NOTICE.md` and `ACKNOWLEDGEMENTS.md` for the full upstream list.
 diff --git a/new/kernel/xechide/xechide.h b/kernel/xechide/xechide.h
 new file mode 100644
-index 0000000..967bfac
+index 0000000..ba551cb
 --- /dev/null
 +++ b/kernel/xechide/xechide.h
 @@ -0,0 +1,130 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
++/* SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only */
 +/*
 + * XEChide - kernel-level app & path hiding.
 + *
@@ -340,11 +354,11 @@ index 0000000..967bfac
 +#endif /* _XECHIDE_H */
 diff --git a/new/kernel/xechide/xechide_binder.c b/kernel/xechide/xechide_binder.c
 new file mode 100644
-index 0000000..06dc9fb
+index 0000000..7194b9c
 --- /dev/null
 +++ b/kernel/xechide/xechide_binder.c
 @@ -0,0 +1,456 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
++/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * XEChide - L1 enforcement (binder).
 + *
@@ -802,11 +816,11 @@ index 0000000..06dc9fb
 +}
 diff --git a/new/kernel/xechide/xechide_core.c b/kernel/xechide/xechide_core.c
 new file mode 100644
-index 0000000..20a835e
+index 0000000..4d9259d
 --- /dev/null
 +++ b/kernel/xechide/xechide_core.c
 @@ -0,0 +1,472 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
++/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * XEChide - kernel rule engine.
 + *
@@ -1280,11 +1294,11 @@ index 0000000..20a835e
 +}
 diff --git a/new/kernel/xechide/xechide_lsm.c b/kernel/xechide/xechide_lsm.c
 new file mode 100644
-index 0000000..5c22756
+index 0000000..a7eb25d
 --- /dev/null
 +++ b/kernel/xechide/xechide_lsm.c
 @@ -0,0 +1,437 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
++/* SPDX-License-Identifier: GPL-2.0-only */
 +/*
 + * XEChide - L0 enforcement.
 + *
@@ -1723,11 +1737,11 @@ index 0000000..5c22756
 +}
 diff --git a/new/kernel/xechide/xechide_match.c b/kernel/xechide/xechide_match.c
 new file mode 100644
-index 0000000..0532b03
+index 0000000..1bae736
 --- /dev/null
 +++ b/kernel/xechide/xechide_match.c
 @@ -0,0 +1,225 @@
-+﻿/* SPDX-License-Identifier: GPL-2.0 */
++﻿/* SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only */
 +/*
 + * XEChide - pure path/name matching. No kernel API is used here so the same
 + * code is compiled into the module and into the host test suite
@@ -1954,11 +1968,11 @@ index 0000000..0532b03
 +}
 diff --git a/new/kernel/xechide/xechide_parcel.c b/kernel/xechide/xechide_parcel.c
 new file mode 100644
-index 0000000..7e3454d
+index 0000000..d481c48
 --- /dev/null
 +++ b/kernel/xechide/xechide_parcel.c
 @@ -0,0 +1,562 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
++/* SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only */
 +/*
 + * XEChide - binder parcel rewriting.
 + *
