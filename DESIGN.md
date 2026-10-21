@@ -257,7 +257,41 @@ inherently visible inside its own process (GOT, anonymous executable mapping,
 readable memory). Those traces are listed in `SECURITY.md`; the kernel form is
 the answer when they matter.
 
-## 10. Sharing one config between the forms
+## 10. KPM form (APatch / KernelPatch)
+
+The KPM form is a real KernelPatch Module (ET_REL AArch64) loaded by the KPM
+engine, so it gives kernel enforcement on APatch without rebuilding a kernel.
+It is built against the public KPM SDK at pinned commit
+`052c73f93dbb84861218086e60a9962c48ff3f7f` (headers fetched at build time,
+GPL-2.0-or-later).
+
+- **Config**: the same `struct xechide_config` file is read by `KPM_INIT`;
+  `KPM_CTL0("reload")` re-reads it into the inactive of two static buffers and
+  publishes the pointer with release/acquire atomics. Old buffers are never
+  freed while hooks may still read them.
+- **Binder**: `hook_wrap` on `binder_transaction` (5 args) and
+  `binder_thread_read` (6 args: `proc, thread, binder_buffer, size, consumed,
+  non_block`). Requests are renamed in place when the interface token matches;
+  the thread is marked, and the matching `BR_REPLY` stream is filtered with the
+  same `xe_parcel_filter()` as the kernel patch, including structural removal
+  and its `offsets_size != 0` pass-through. A shared spin lock serialises the
+  filter's static scratch; per-call copy/read scratch is separate.
+- **Paths**: `hook_syscalln` before-hooks on `openat`, `newfstatat`,
+  `faccessat`, `faccessat2`, `readlinkat`, `statx`, `openat2` check
+  `current_uid()` and `xe_match_path()`; a hidden path sets
+  `skip_origin + ret = -ENOENT`. `getdents64` is an after-hook that removes
+  dirents whose name equals a hidden package for that uid.
+- **Scope**: 64-bit syscall paths; binder hooks are ABI-independent. KernelSU's
+  `CONFIG_KPM` engine is not a host (it does not export the KernelPatch hook
+  runtime), so this form targets APatch/KernelPatch and the Zygisk module stays
+  the KernelSU path.
+- **Failure policy**: missing symbols, failed hooks, invalid config, unknown
+  parcel shapes and failed copies all pass through unchanged.
+
+The KPM source is GPL-2.0-or-later; the shared files remain dual-licensed and
+are compiled under the GPL-2.0 option here.
+
+## 11. Sharing one config between the forms
 
 `xechide-ctl apply` atomically writes the packed config to
 `/data/adb/xechide/config` and, if a patched KernelSU driver is present, applies
