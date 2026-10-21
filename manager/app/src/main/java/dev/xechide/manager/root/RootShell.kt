@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 package dev.xechide.manager.root
 
 import android.os.Looper
