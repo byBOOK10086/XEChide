@@ -3,4 +3,4 @@ name=XEChide
 version=v1.0.0
 versionCode=10000
 author=byBOOK10086
-description=Userspace hiding: native binder parcel filter plus file/path and /proc/maps hiding. Zygisk (Magisk) or Zygisk Next (KernelSU/APatch) required. Kernel-mode XEChide is an optional advanced build.
+description=Native hiding: Zygisk parcel/file/maps filter plus a real KernelPatch KPM (xechide.kpm) for APatch. One config drives both; kernel patch is the optional advanced form.
