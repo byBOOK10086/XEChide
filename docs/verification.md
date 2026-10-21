@@ -21,6 +21,7 @@ helper build, and the Zygisk module build + zip lint.
 | license | `python3 tools/license_check.py` | GPL-3.0 userspace / GPL-2.0 kernel / dual shared split, LICENSE texts and upstream attribution are intact |
 | arm64 helper | zig `-target aarch64-linux-musl -static` | the helper really builds for the target the APK bundles |
 | module | `bash module/build.sh` | the freestanding AArch64 Zygisk `.so` links with no `DT_NEEDED`, exports both entry points, and the packaged zip passes `lint_module.py` |
+| KPM | `bash kpm/build.sh` | the `.kpm` is ET_REL AArch64 with `.kpm.info`/`.init`/`.ctl0`/`.exit`, pinned KernelPatch SDK, and only exported runtime imports (`kpm_check.py`) |
 
 CI cannot compile the LSM/kprobe glue: that needs a kernel tree per KMI. The
 first build is the acceptance test for those files. It also cannot run Zygisk;
@@ -63,61 +64,96 @@ adb logcat -b events | grep -i 'avc: denied' (while running M.3/M.4)
   config is delivered by the root companion.
 ```
 
-## 3. Kernel-form checklist
+## 3. KPM-form checklist (APatch)
+
+Prereqs: APatch/KernelPatch with the KPM runtime, `xechide.kpm` installed at
+`/data/adb/ap/kpm/xechide/xechide.kpm`, one hidden app, and the manager helper
+with a config file. This is the native KPM form; it needs no Zygisk and no
+custom kernel image.
+
+```
+### K.1 the module is loaded by APatch
+(APatch KPM screen) the module "xechide" is listed/loaded
+  expect: name=xechide, license=GPL v2; otherwise check the KPM load error
+
+### K.2 control/reload works
+send "status" in the KPM control dialog
+  expect: loaded=1 rules=<n> binder=1 path=1 getdents=1
+after changing rules, send "reload" (or reboot)
+  expect: reload=ok rules=<n>. The helper mirrors the config to
+  /data/data/me.bmax.apatch/files/xechide.cfg (0600, APatch uid), so the
+  APatch-app control can read it without traversing /data/adb.
+
+### K.3 binder hiding
+run the detector in a target uid
+  expect: hidden packages absent/renamed in getInstalledPackages and
+  getPackageInfo replies; binder=1 is required
+
+### K.4 path and dirent hiding
+in the target app: exists()/open() on the hidden app's Android/data dir
+  expect: ENOENT; File.listFiles() on Android/data does not show the package
+
+### K.5 no in-process trace
+in the target app: read /proc/self/maps and inspect its own libs
+  expect: no XEChide module image in the app process (enforcement is in the
+  kernel). The KPM itself is visible to root/kallsyms, as documented.
+```
+
+## 4. Kernel-form checklist
 
 Prereqs: a KernelSU kernel with the patch applied, the manager installed, the
 helper at `/data/adb/xechide/bin/xechide-ctl`, and one app marked hidden with a
 rule whose target is uid 2000 (shell) so `adb` can play the detector.
 
 ```
-### 3.1 hooks installed
+### 4.1 hooks installed
 adb shell su -c dmesg | grep xechide
   expect: "xechide: 5/5 L0 hooks installed"
   expect: "xechide: 2/2 binder probes installed"
   any "hook failed" line means that layer is off; the device still boots.
 
-### 3.2 shell cannot list the package
+### 4.2 shell cannot list the package
 adb shell pm list packages | grep com.example.hidden
   expect: no output
 
-### 3.3 shell cannot stat the APK
+### 4.3 shell cannot stat the APK
 adb shell ls -la /data/app | grep com.example.hidden
   expect: no output ("no permission" from SELinux is also acceptable; the
   relevant case is a uid that SELinux *does* allow, i.e. shell listing
   /sdcard/Android/data)
 
-### 3.4 shell cannot see the data / external dirs
+### 4.4 shell cannot see the data / external dirs
 adb shell ls -la /sdcard/Android/data | grep com.example.hidden
   expect: no output
 
-### 3.5 the hider is not visible
+### 4.5 the hider is not visible
 adb shell ls -la /data/adb/xechide
   expect: "No such file or directory"
 
-### 3.6 counters move
+### 4.6 counters move
 adb shell su -c '/data/adb/xechide/bin/xechide-ctl stats'
   expect: parcel_rebuilt or parcel_rewritten increases after 2.2, path_hits
   increases after 2.3/2.4, lsm_hooks == 5, binder_hooks == 2
 
-### 3.7 root sees everything (by design)
+### 4.7 root sees everything (by design)
 adb shell su -c 'pm list packages | grep com.example.hidden'
   expect: the package is listed. XEChide does not and cannot hide from root.
 
-### 3.8 process lists
+### 4.8 process lists
 adb shell ps -A | grep com.example.hidden
   expect: no output (readdir of /proc is filtered)
 
 `dumpsys` is NOT covered: it writes into a file descriptor, not a parcel.
 Do not use it as a leak test; see SECURITY.md item 3.
 
-### 3.9 notifications / shortcuts / jobs
+### 4.9 notifications / shortcuts / jobs
 adb shell cmd notification list | grep com.example.hidden
 adb shell cmd shortcut get-shortcuts --user 0 | grep com.example.hidden
 adb shell cmd jobscheduler get-job-state --user 0 <target uid> <job id>
   expect: no output for the hidden package (replies come from
   INotificationManager / IShortcutService / IJobScheduler and are parcel-filtered)
 
-### 3.10 the package databases are not a bypass
+### 4.10 the package databases are not a bypass
 for f in packages.list packages.xml appops.xml notification_policy.xml; do
   adb shell cat /data/system/$f | grep com.example.hidden
 done
@@ -125,25 +161,26 @@ adb shell ls /data/system/usagestats /data/system/shortcut_service /data/system/
   expect: "Permission denied" or no such file for a target uid; this is
   intentional - parsing the databases must not be a way around the binder filter
 
-### 3.11 fail-open
+### 4.11 fail-open
 Reboot with the manager disabled (freeze it) and check that the device boots and
 that nothing is hidden: an empty configuration must change no behaviour.
 ```
 
-## 4. Builds that have actually happened
+## 5. Builds that have actually happened
 
 | Component | Toolchain | Result |
 |---|---|---|
 | host tests | Zig 0.15.2 (clang), `-DXECHIDE_HOST`, ASan+UBSan fuzz | **81 assertions** + 200k fuzz iterations pass |
-| root helper | Zig 0.15.2, `aarch64-linux-musl -static` | 1,050,248-byte ARM64 binary (apply/status/file-get included) |
-| manager APK | JDK 17 + Gradle 8.9 + AGP 8.7.3 + compileSdk 35 | **`BUILD SUCCESSFUL`**, 23,923,027-byte debug APK, helper bundled at `assets/xechide-ctl-arm64` |
-| Zygisk module | Zig 0.15.2, `aarch64-linux-android` freestanding (`-nostdlib -nostdlib++`) | 26,568-byte `.so` (ET_DYN, no `DT_NEEDED`, both entry points exported); 15,089-byte zip; `inspect_elf.py` + `lint_module.py` pass |
+| root helper | Zig 0.15.2, `aarch64-linux-musl -static` | 1,054,696-byte ARM64 binary (apply/status/file-get/KPM status + APatch mirror) |
+| manager APK | JDK 17 + Gradle 8.9 + AGP 8.7.3 + compileSdk 35 | **`BUILD SUCCESSFUL`**, 23,924,635-byte debug APK, helper bundled at `assets/xechide-ctl-arm64` |
+| Zygisk module | Zig 0.15.2, `aarch64-linux-android` freestanding (`-nostdlib -nostdlib++`) | 26,568-byte `.so` (ET_DYN, no `DT_NEEDED`, both entry points exported); 28,260-byte zip with `xechide.kpm`; `inspect_elf.py` + `lint_module.py` pass |
+| KPM | Zig 0.15.2, `aarch64-freestanding` + pinned KernelPatch SDK | 34,504-byte ET_REL `.kpm`; `.kpm.info/.init/.ctl0/.exit` present, no non-exported `kf_filp_*` imports; `kpm_check.py` pass |
 
-The APK was built on 2026-10-20 with the exact sources in this repository. It is
+The APK was built on 2026-10-21 with the exact sources in this repository. It is
 debug-signed (`CN=Android Debug`), package `dev.xechide.manager`, versionCode 1,
 minSdk 30, targetSdk 35.
 
-## 5. What has NOT been done
+## 6. What has NOT been done
 
 - The patched kernel has **never been compiled**. It was written against the
   KernelSU tree at the pinned commit and against `lsm_hook_defs.h` from 5.10
@@ -154,10 +191,14 @@ minSdk 30, targetSdk 35.
   validated statically against the published v4 layout, the ELF is machine
   checked, but `pltHookCommit()` success, companion IPC and the parcel rewrite
   path are unproven until the on-device checklist above is run.
-- No detector has been run against either form. When one is, its output goes in
+- The KPM has **never been loaded** by a real APatch/KernelPatch KPM engine:
+  the ELF format, metadata, lifecycle sections, relocation types and import
+  list are statically validated; hook registration, binder arity at runtime and
+  the syscall hooks still need the KPM checklist.
+- No detector has been run against any form. When one is, its output goes in
   this file - including the leaks.
 
-## 6. Known measurement gaps
+## 7. Known measurement gaps
 
 | Question | How to measure |
 |---|---|
@@ -167,3 +208,6 @@ minSdk 30, targetSdk 35.
 | module cold-start overhead | `am start -W` 20x; preAppSpecialize adds one companion round-trip plus one `pltHookCommit()` per target process |
 | module maps filtering | read `/proc/self/maps` in a target app and diff against a stock build; the module image range must be absent |
 | module file hiding | `File.listFiles()` on `/sdcard/Android/{data,media,obb}` in a target app; hidden package dirs must be missing and `exists()` false |
+| KPM binder filter | hidden package absent from `getInstalledPackages` in a target uid; `status` shows `binder=1`; check `dmesg` for "xechide-kpm: binder=1" |
+| KPM path/dirent hiding | `exists()`/`open()` on the hidden app's external dirs return ENOENT; `listFiles()` omits the package; `getdents64` after-hook path |
+| KPM runtime import resolution | load the module on APatch and confirm no "unknown symbol" for `hook_syscalln`/`hook_wrap`/`kallsyms_lookup_name`; `kpm_check.py` already rejects non-exported `kf_filp_*` |
