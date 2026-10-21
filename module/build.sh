@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-3.0-only
 # Build and package the XEChide Zygisk module (Linux/macOS CI).
 # Requires: zig 0.15.x and python3. No Android NDK is needed.
 set -euo pipefail
