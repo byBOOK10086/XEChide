@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-3.0-only
 """Validate a packaged XEChide module zip.
 
 Checks that the zip can be flashed by Magisk / KernelSU + Zygisk Next:
