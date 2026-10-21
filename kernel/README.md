@@ -73,3 +73,17 @@ cat /proc/kallsyms | grep -E 'selinux_(inode_permission|file_open)'
 ```
 
 Counters are available through `KSU_IOCTL_XECHIDE_STATS` (`ctl/README.md`).
+
+## Licensing and provenance
+
+- `xechide_core.c`, `xechide_lsm.c`, `xechide_binder.c`: **GPL-2.0-only**
+  (`LICENSES/GPL-2.0-only.txt`), like the kernel code they are built into.
+- `xechide.h`, `xechide_match.c`, `xechide_parcel.c`: **GPL-2.0-only OR
+  GPL-3.0-only**. The kernel form uses the GPL-2.0 option; the Zygisk module,
+  helper and host tests use the GPL-3.0 option. This is the only reason the
+  same pure logic can be shared without duplicating or relicensing it.
+- The patch applies to KernelSU `tiann/KernelSU` at the pinned commit recorded
+  in `patches/README.md`. It only calls KernelSU's public supercall and
+  `ksu_lsm_hook()` interfaces; no KernelSU implementation code is copied and
+  no KernelSU file is relicensed.
+- See `NOTICE.md` and `ACKNOWLEDGEMENTS.md` for the full upstream list.
