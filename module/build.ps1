@@ -64,6 +64,13 @@ if ($LASTEXITCODE -ne 0) {
 $size = (Get-Item $out).Length
 Write-Host ("built {0} ({1} bytes)" -f $out, $size)
 
+# Native APatch/KernelPatch KPM. SKIP_KPM=1 only for a Zygisk-only test build.
+if ($env:SKIP_KPM -ne "1") {
+    & (Join-Path $PSScriptRoot "..\kpm\build.ps1") -Zig $Zig
+    if ($LASTEXITCODE -ne 0) { throw "KPM build failed" }
+    Copy-Item (Join-Path $PSScriptRoot "..\kpm\out\xechide.kpm") (Join-Path $PSScriptRoot "xechide.kpm") -Force
+}
+
 if ($Zip) {
     $version = "v1.0.0"
     foreach ($line in Get-Content (Join-Path $PSScriptRoot "module.prop")) {
