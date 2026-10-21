@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-3.0-only  */
 #define _GNU_SOURCE
 /*
  * Host tests for the two pure translation units: xechide_match.c and
