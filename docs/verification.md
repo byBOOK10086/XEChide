@@ -6,11 +6,11 @@ table, the second table is a checklist for a human with a phone.
 
 ## 1. Automatic (CI, every push)
 
-CI runs the seven jobs in the table below. The last fully verified green run
-(2026-10-20) predates the licence-header change; the `license-audit` job and the
-header split are part of the current change set and are verified locally (133
-checks) but their first hosted run must be checked before this line is quoted
-as green again.
+All seven jobs are green on `main` (2026-10-21, run
+[39548105368](https://github.com/byBOOK10086/XEChide/actions/runs/39548105368)):
+ABI cross-check, license split + upstream attribution, host tests + ASan fuzz,
+root helper host build, stock-KernelSU patch apply, the aarch64-linux-musl
+helper build, and the Zygisk module build + zip lint.
 
 | Check | Command | Proves |
 |---|---|---|
