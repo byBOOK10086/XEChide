@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-only
 # XEChide - prove that patches/xechide-core.patch still applies to the pinned
 # stock KernelSU commit. Needs git; does not need a full clone.
 set -eu
