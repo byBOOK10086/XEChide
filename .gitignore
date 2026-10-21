@@ -28,6 +28,9 @@ Thumbs.db
 # module build outputs
 module/out/
 module/zygisk/
+module/xechide.kpm
+kpm/out/
+kpm/build/
 manager/app/src/main/assets/xechide-ctl-arm64
 ui/out/
 tests/host/xechide-host-fuzz*
