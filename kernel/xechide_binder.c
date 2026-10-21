@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-only  */
 /*
  * XEChide - L1 enforcement (binder).
  *
@@ -373,6 +373,7 @@ static int xe_read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct xe_read_state *st = (struct xe_read_state *)ri->data;
 	unsigned int used = 0;
+	u64 used64 = 0;
 	u32 uid = 0, pid;
 
 	if (regs_return_value(regs))
@@ -387,10 +388,13 @@ static int xe_read_ret(struct kretprobe_instance *ri, struct pt_regs *regs)
 		mark_remove(pid);
 		return 0;
 	}
-	if (copy_from_user_nofault(&used, (void __user *)st->consumed, 4))
+	/* binder_ioctl passes &bwr.read_consumed: a kernel stack address, not a
+	 * user pointer (bwr is the kernel copy of binder_write_read). Read it
+	 * directly, as a full binder_size_t. */
+	used64 = *(volatile u64 *)(uintptr_t)st->consumed;
+	if (!used64 || used64 > XE_PARCEL_MAX)
 		return 0;
-	if (!used || used > XE_PARCEL_MAX)
-		return 0;
+	used = (unsigned int)used64;
 
 	if (filter_reply(uid, (void __user *)st->buffer, used))
 		mark_remove(pid);
