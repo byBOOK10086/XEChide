@@ -12,6 +12,7 @@ Three license groups coexist in this repository on purpose:
 |---|---|---|
 | Userspace | `manager/`, `module/` (except the shared files below), `ctl/`, `tools/`, `tests/`, `ui/`, docs | **GPL-3.0-only** — root `LICENSE`, copy in `LICENSES/GPL-3.0-only.txt` |
 | Kernel-only | `kernel/xechide_core.c`, `kernel/xechide_lsm.c`, `kernel/xechide_binder.c` | **GPL-2.0-only** — copy in `LICENSES/GPL-2.0-only.txt` |
+| KPM | `kpm/src/`, `kpm/compat/`, `kpm/xechide.lds` | **GPL-2.0-or-later** — copy in `LICENSES/GPL-2.0-or-later.txt` |
 | Shared | `kernel/xechide.h`, `kernel/xechide_match.c`, `kernel/xechide_parcel.c` | **GPL-2.0-only OR GPL-3.0-only** |
 
 The shared files are the packed ABI and the pure matching/parcel logic. The
@@ -37,6 +38,13 @@ not, is in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).
   `0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2` and uses the public supercall
   dispatch table, `ksu_lsm_hook()` and manager authentication. No KernelSU
   source is copied into this repository.
+- **KernelPatch / APatch** (`bmax121/KernelPatch` GPL-2.0,
+  `bmax121/APatch` GPL-2.0) — the KPM form is built against the public KPM SDK
+  at pinned commit `052c73f93dbb84861218086e60a9962c48ff3f7f` and its
+  `hook_syscalln` / `hook_wrap` / `kallsyms_lookup_name` runtime API. The SDK
+  headers are fetched at build time (not vendored); no KernelPatch/APatch
+  implementation code is copied into this repository. The `.kpm` is a native
+  KernelPatch module, not a wrapper around a script or an LKM.
 - **Magisk / Zygisk** (`topjohnwu/Magisk`, GPL-3.0) — the module form runs as a
   Zygisk module and calls the public v4 module API (`registerModule`,
   `connectCompanion`, `pltHookRegister`, `pltHookCommit`). The ABI declarations
@@ -61,6 +69,9 @@ not, is in [`ACKNOWLEDGEMENTS.md`](ACKNOWLEDGEMENTS.md).
 - No LSPosed, Shizuku, Magisk or Zygisk implementation code is copied; the
   module contains an independent declaration of the public ABI and its own
   implementation.
+- No KernelPatch or APatch implementation code is vendored. The KPM form is
+  compiled against the public KernelPatch SDK headers at build time, which are
+  GPL-2.0-or-later and are attributed here.
 - No LSPlt code is vendored; the PLT hook engine is whatever the installed
   Zygisk provides at runtime.
 - **TrickyStore** (ships without a license) and **OhMyKeymint** (AGPL-3.0) are
