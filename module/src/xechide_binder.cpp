@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-3.0-only */
+/* SPDX-License-Identifier: GPL-3.0-only  */
 /*
  * XEChide userspace module - binder reply filtering (L1 in the module form).
  *
