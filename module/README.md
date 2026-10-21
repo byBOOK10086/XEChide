@@ -86,3 +86,12 @@ src/               entry + companion, libc shims, binder and file hooks
   process 64-bit? Did you restart the target app after applying?
 - `xechide-ctl status` (manager helper) prints module/config/kernel presence;
   `xechide-ctl file-get` dumps the packed config.
+
+## Licence
+
+The module is **GPL-3.0-only** (see the repository `LICENSE` and `NOTICE.md`).
+It shares three files with the kernel form (`kernel/xechide.h`,
+`xechide_match.c`, `xechide_parcel.c`) under `GPL-2.0-only OR GPL-3.0-only`;
+the kernel uses the GPL-2.0 option and this module uses GPL-3.0. Thanks to
+KernelSU, Magisk/Zygisk, LSPlt and the other upstreams listed in
+`ACKNOWLEDGEMENTS.md`.
