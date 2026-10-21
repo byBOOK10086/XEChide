@@ -253,6 +253,16 @@ private fun StatusCard(
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val kpmLabel = if (deviceStatus?.kpmInstalled == true) {
+        stringResource(R.string.status_kpm_installed)
+    } else {
+        stringResource(R.string.status_kpm_missing)
+    }
+    val kpmColor = if (deviceStatus?.kpmInstalled == true) {
+        MaterialTheme.colorScheme.primary
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
     val helperLabel = when (helperState) {
         HelperState.CHECKING -> stringResource(R.string.helper_state_checking)
         HelperState.INSTALLED -> stringResource(R.string.helper_state_installed)
@@ -299,6 +309,11 @@ private fun StatusCard(
                 label = stringResource(R.string.status_kernel_label),
                 value = kernelLabel,
                 valueColor = kernelColor,
+            )
+            StatusRow(
+                label = stringResource(R.string.status_kpm_label),
+                value = kpmLabel,
+                valueColor = kpmColor,
             )
 
             Text(
