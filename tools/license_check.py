@@ -49,8 +49,9 @@ KERNEL_ONLY = {
 }
 USERS_PREFIX = ("manager/", "module/", "ctl/", "tools/", "tests/", "ui/")
 CODE_EXT = {".c", ".h", ".cpp", ".cc", ".hpp", ".py", ".sh", ".kt", ".kts",
-            ".ps1", ".html", ".yml", ".yaml", ".pro"}
+            ".ps1", ".html", ".yml", ".yaml", ".pro", ".lds"}
 CODE_NAMES = {"Makefile", "CMakeLists.txt"}
+KPM_PREFIX = "kpm/"
 SKIP_FILES = {
     "patches/xechide-core.patch",
     "module/module.prop",
@@ -76,17 +77,20 @@ def main():
     lic = read("LICENSE")
     gpl3 = read("LICENSES/GPL-3.0-only.txt")
     gpl2 = read("LICENSES/GPL-2.0-only.txt")
+    gpl2_later = read("LICENSES/GPL-2.0-or-later.txt")
     check("GNU GENERAL PUBLIC LICENSE" in lic and "Version 3" in lic[:400],
           "root LICENSE is the GPL-3.0 text")
     check("GNU GENERAL PUBLIC LICENSE" in gpl2 and "Version 2" in gpl2[:400],
           "LICENSES/GPL-2.0-only.txt is the GPL-2.0 text")
+    check("GNU GENERAL PUBLIC LICENSE" in gpl2_later and "Version 2" in gpl2_later[:400],
+          "LICENSES/GPL-2.0-or-later.txt is the GPL-2.0 text")
     check("Version 3" in gpl3[:400], "LICENSES/GPL-3.0-only.txt is the GPL-3.0 text")
 
     print("== upstream attribution")
     notice = read("NOTICE.md")
     ack = read("ACKNOWLEDGEMENTS.md")
     for name in ("KernelSU", "Magisk", "Zygisk", "LSPlt", "HMA-oss", "AndroidX",
-                 "Zig"):
+                 "Zig", "KernelPatch", "APatch"):
         check(name in notice, "NOTICE mentions " + name)
         check(name in ack, "ACKNOWLEDGEMENTS mentions " + name)
     check("0faec0cc7b5f655170d89bf9c4d28bb5ca271fa2" in notice or
@@ -117,6 +121,10 @@ def main():
                 want = "GPL-2.0-only OR GPL-3.0-only"
             elif rel in KERNEL_ONLY:
                 want = "GPL-2.0-only"
+            elif rel.startswith("kpm/src/") or rel.startswith("kpm/compat/") or rel == "kpm/xechide.lds":
+                want = "GPL-2.0-or-later"
+            elif rel.startswith("kpm/"):
+                want = "GPL-3.0-only"
             elif rel.startswith(USERS_PREFIX) or rel.startswith(".github/"):
                 want = "GPL-3.0-only"
             else:
