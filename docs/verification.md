@@ -6,9 +6,11 @@ table, the second table is a checklist for a human with a phone.
 
 ## 1. Automatic (CI, every push)
 
-All six jobs are green on `main` (2026-10-20): ABI cross-check, host tests +
-ASan fuzz, root helper host build, stock-KernelSU patch apply, the
-aarch64-linux-musl helper build, and the Zygisk module build + zip lint.
+CI runs the seven jobs in the table below. The last fully verified green run
+(2026-10-20) predates the licence-header change; the `license-audit` job and the
+header split are part of the current change set and are verified locally (133
+checks) but their first hosted run must be checked before this line is quoted
+as green again.
 
 | Check | Command | Proves |
 |---|---|---|
@@ -16,6 +18,7 @@ aarch64-linux-musl helper build, and the Zygisk module build + zip lint.
 | patch | `tools/patchcheck.sh` | `patches/xechide-core.patch` applies to stock KernelSU `0faec0cc7b5f...` |
 | helper | `cc -std=c11 -Wall -Wextra -Werror ctl/xechide-ctl.c` | the ioctl/file ABI and the packed struct compile without warnings |
 | ABI | `python3 tools/abi_check.py` | kernel header, Kotlin codec, helper, patch and module all agree on numbers, sizes, paths and the package-name charset |
+| license | `python3 tools/license_check.py` | GPL-3.0 userspace / GPL-2.0 kernel / dual shared split, LICENSE texts and upstream attribution are intact |
 | arm64 helper | zig `-target aarch64-linux-musl -static` | the helper really builds for the target the APK bundles |
 | module | `bash module/build.sh` | the freestanding AArch64 Zygisk `.so` links with no `DT_NEEDED`, exports both entry points, and the packaged zip passes `lint_module.py` |
 
@@ -134,7 +137,7 @@ that nothing is hidden: an empty configuration must change no behaviour.
 | host tests | Zig 0.15.2 (clang), `-DXECHIDE_HOST`, ASan+UBSan fuzz | **81 assertions** + 200k fuzz iterations pass |
 | root helper | Zig 0.15.2, `aarch64-linux-musl -static` | 1,050,248-byte ARM64 binary (apply/status/file-get included) |
 | manager APK | JDK 17 + Gradle 8.9 + AGP 8.7.3 + compileSdk 35 | **`BUILD SUCCESSFUL`**, 23,923,027-byte debug APK, helper bundled at `assets/xechide-ctl-arm64` |
-| Zygisk module | Zig 0.15.2, `aarch64-linux-android` freestanding (`-nostdlib -nostdlib++`) | 26,568-byte `.so` (ET_DYN, no `DT_NEEDED`, both entry points exported); 14,955-byte zip; `inspect_elf.py` + `lint_module.py` pass |
+| Zygisk module | Zig 0.15.2, `aarch64-linux-android` freestanding (`-nostdlib -nostdlib++`) | 26,568-byte `.so` (ET_DYN, no `DT_NEEDED`, both entry points exported); 15,089-byte zip; `inspect_elf.py` + `lint_module.py` pass |
 
 The APK was built on 2026-10-20 with the exact sources in this repository. It is
 debug-signed (`CN=Android Debug`), package `dev.xechide.manager`, versionCode 1,
