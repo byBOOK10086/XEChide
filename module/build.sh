@@ -34,6 +34,14 @@ mkdir -p "$(dirname "$out")"
     "$root/kernel/xechide_match.c"
 
 version="$(grep '^version=' "$here/module.prop" | head -n1 | cut -d= -f2)"
+
+# Native APatch/KernelPatch KPM (same config, kernel enforcement without a
+# custom kernel image). Set SKIP_KPM=1 only for a Zygisk-only test build.
+if [ "${SKIP_KPM:-0}" != "1" ]; then
+    ZIG="$zig" bash "$root/kpm/build.sh"
+    cp -f "$root/kpm/out/xechide.kpm" "$here/xechide.kpm"
+fi
+
 zip_path="$here/out/xechide-module-${version}.zip"
 python3 "$here/tools/pack_module.py" "$here" "$zip_path"
 python3 "$here/tools/inspect_elf.py" "$out" --require-entry
