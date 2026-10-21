@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 CC ?= cc
 CFLAGS ?= -O2 -g -std=c11 -Wall -Wextra -Werror -Wno-unused-parameter
 CPPFLAGS += -DXECHIDE_HOST -I../../kernel
