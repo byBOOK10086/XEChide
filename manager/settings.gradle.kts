@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import org.gradle.api.initialization.resolve.RepositoriesMode
 
 pluginManagement {
